@@ -91,3 +91,7 @@ pre.raw{white-space:pre-wrap;font-size:.78rem;background:var(--bg);border:1px so
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 @media (max-width:380px){.grid2{grid-template-columns:1fr}.dl{grid-template-columns:1fr}.dl dt{font-weight:600;color:var(--fg)}}
+.dl dd{white-space:pre-line}
+.dl dd.bad{color:var(--crit);font-weight:600} .dl dd.warnc{color:var(--warn);font-weight:600}
+h3.sec{font-size:.92rem;margin:6px 0 0;padding-top:8px;border-top:1px solid var(--line)}
+.issue .link.t{font-size:.95rem;font-weight:600;color:var(--fg);text-align:left;padding:0}

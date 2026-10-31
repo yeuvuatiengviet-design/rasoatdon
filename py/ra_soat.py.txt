@@ -303,7 +303,7 @@ def ra_soat(dons, dm, Q, bang_td=None):
                 if spec == "*":
                     m2, l2 = "Phù hợp", "Không đối chiếu ICD (thuốc theo triệu chứng/thủ thuật)"
                 else:
-                    ccd_c = set(c for r in rules for c in any_icd(icds, r.get("icd_ccd_tuyet_doi")))   # mã chống chỉ định không bao giờ tính là đúng chỉ định
+                    ccd_c = set(c for r in rules for c in any_icd(icds, r.get("icd_ccd_tuyet_doi"))) | set(any_icd(icds, hd.get("icd_ccd")))   # mã chống chỉ định không bao giờ tính là đúng chỉ định
                     ph = [c for c in any_icd(icds, spec) if c not in ccd_c]
                     dk = [c for c in any_icd(icds, hd.get("icd_HDSD_co_dieu_kien")) if c not in ccd_c]
                     pd = [c for r in rules for c in any_icd(icds, r.get("icd_phu_hop")) + any_icd(icds, r.get("icd_co_dieu_kien"))]
@@ -333,6 +333,21 @@ def ra_soat(dons, dm, Q, bang_td=None):
                 elif d["tuoi"] is not None and ttu and d["tuoi"] < ttu:
                     add(t["ten"], hc, "Tuổi ngoài HDSD", f"Bệnh nhân {d['tuoi']} tuổi – HDSD chỉ có chỉ định/liều từ {ttu:g} tuổi",
                         "Cần lưu ý", "Xem lại lựa chọn thuốc/dạng bào chế cho lứa tuổi", "HDSD (Thuoc_HDSD)", "", muc_icd, str(hd.get("trang_thai") or ""))
+                # --- ICD chống chỉ định theo mục Chống chỉ định của tờ HDSD (từng sản phẩm) ---
+                da_bao = set(c for r in rules for c in any_icd(icds, r.get("icd_ccd_tuyet_doi")))
+                cc_hd = str(hd.get("ccd_can_cu") or "")
+                for c in any_icd(icds, hd.get("icd_ccd")):
+                    if c in da_bao: continue
+                    da_bao.add(c)
+                    add(t["ten"], hc, "ICD chống chỉ định", f"Bệnh nhân có {c} – chống chỉ định với {t['ten']} theo tờ HDSD. {cc_hd}".strip(),
+                        "Nghiêm trọng", "Đổi thuốc khác hoặc xác minh chẩn đoán/mã ICD", "HDSD – Chống chỉ định: " + str((info or {}).get("ccd") or "")[:300],
+                        "", muc_icd, str(hd.get("trang_thai") or ""))
+                for c in any_icd(icds, hd.get("icd_ccd_kiem_tra")):
+                    if c in da_bao: continue
+                    da_bao.add(c)
+                    add(t["ten"], hc, "ICD chống chỉ định – xác định mức độ", f"Bệnh nhân có {c}: tờ HDSD chống chỉ định {t['ten']} với tình trạng này (không nêu/nêu mức độ nặng). {cc_hd}".strip(),
+                        "Cần lưu ý", "Xác định mức độ (eGFR, men gan, NYHA, nhịp tim, HA…) trước khi dùng; ghi rõ trong bệnh án", "HDSD – Chống chỉ định: " + str((info or {}).get("ccd") or "")[:300],
+                        "", muc_icd, str(hd.get("trang_thai") or ""))
                 can = str(hd.get("can_thuoc") or "").strip()
                 if can and not any(re.search(can, o) for o in others):
                     add(t["ten"], hc, "Phối hợp bắt buộc theo HDSD", f"HDSD yêu cầu dùng kèm thuốc nhóm /{can}/ nhưng đơn không có", "Cần lưu ý",

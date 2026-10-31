@@ -14,7 +14,7 @@
 2. Kiểm tra phần Dữ liệu đơn; sửa chỗ đọc sai – kết quả tự cập nhật. Thuốc khung vàng là chưa khớp danh mục.
 3. "Sao chép" hoặc "Gửi Zalo/tin nhắn" để trao đổi với bác sĩ (không có họ tên BN).
 
-**Tab Tra cứu thuốc** – gõ tên thuốc/hoạt chất (hoặc mã ICD để xem thuốc có chỉ định đó): ICD theo HDSD, giới hạn liều, thời điểm dùng, văn bản thu hồi, chỉ định/CCĐ theo tờ HDSD và các thuốc trong danh mục có tương tác.
+**Tab Tra cứu thuốc** – gõ tên thuốc/hoạt chất (hoặc mã ICD để xem thuốc có chỉ định đó): ICD đúng chỉ định, ICD chống chỉ định theo tờ HDSD, giới hạn liều, thời điểm dùng, văn bản thu hồi, chỉ định/CCĐ theo tờ HDSD và các thuốc trong danh mục có tương tác.
 
 ## Cập nhật
 Khi có mạng, ứng dụng tự lấy bộ quy tắc mới (danh mục, tương tác, công văn thu hồi…). Bấm "Kiểm tra cập nhật" để kiểm tra ngay.

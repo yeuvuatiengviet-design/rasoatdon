@@ -248,12 +248,12 @@ function render(r, don) {
   const card = i => {
     const m = MUC[i.muc] || 3, cls = ["", "s1", "s2", "s3"][m];
     return `<article class="issue m${m}"><div class="h"><span class="pill ${cls}">${esc(i.muc)}</span><span class="small mut">${esc(i.tieu_chi)}</span>${i.xuat_toan === "Có" ? '<span class="pill s1">Nguy cơ xuất toán</span>' : ""}</div>
-      <div class="t">${esc(i.thuoc)}</div><p>${esc(i.van_de)}</p>${i.de_xuat ? `<div class="dx">→ ${esc(i.de_xuat)}</div>` : ""}
+      <div class="t">${String(i.thuoc).includes(" + ") || String(i.thuoc).includes(", ") ? esc(i.thuoc) : `<button class="link t" type="button" data-thuoc="${esc(i.thuoc)}">${esc(i.thuoc)} ›</button>`}</div><p>${esc(i.van_de)}</p>${i.de_xuat ? `<div class="dx">→ ${esc(i.de_xuat)}</div>` : ""}
       ${i.nhan_xet ? `<p class="mut small">DS: ${esc(i.nhan_xet)}</p>` : ""}${i.can_cu ? `<div class="cc">Căn cứ: ${esc(i.can_cu).slice(0, 300)}</div>` : ""}</article>`;
   };
   const chinh = iss.filter(i => i.muc !== "Tham khảo"), tk = iss.filter(i => i.muc === "Tham khảo");
   $("issues").innerHTML = chinh.map(card).join("") + (tk.length ? `<details class="more"${chinh.length ? "" : " open"}><summary>${tk.length} mục Tham khảo</summary><div style="display:grid;gap:8px">${tk.map(card).join("")}</div></details>` : "");
-  $("ct").innerHTML = r.chi_tiet.map(c => `<tr><td>${esc(c.thuoc)}</td><td>${esc(c.hoat_chat)}</td><td class="n">${c.dv_ngay ?? "–"}</td><td class="n">${c.so_ngay ?? "–"}</td>
+  $("ct").innerHTML = r.chi_tiet.map(c => `<tr><td><button class="link" type="button" data-thuoc="${esc(c.thuoc)}">${esc(c.thuoc)}</button></td><td>${esc(c.hoat_chat)}</td><td class="n">${c.dv_ngay ?? "–"}</td><td class="n">${c.so_ngay ?? "–"}</td>
     <td>${esc(c.phu_hop_icd)}</td><td>${esc(c.can_cu_icd)}</td><td>${esc(c.danh_muc)}</td></tr>`).join("");
 }
 function resultText() {
@@ -282,12 +282,13 @@ function buildLookup(qt, dmj, tdj) {
   const col = k => H.findIndex(h => h.includes(k));
   const C = {ten: col("ten thuoc"), hc: col("hoat chat"), hl: col("ham luong"), dang: col("dang bao che"), duong: col("duong dung"), cd: col("chi dinh"),
     lieu: col("lieu dung"), ccd: col("chong chi dinh"), cach: col("cach dung"), tt: col("than trong"), pnct: col("phu nu co thai"), tuongtac: col("tuong tac"),
-    tdkmm: col("tac dung khong mong muon"), link: col("to huong dan")};
+    tdkmm: col("tac dung khong mong muon"), link: col("to huong dan"), gc: col("ghi chu")};
   const dm = dmRows.slice(1).filter(r => r[C.ten]).map(r => Object.fromEntries(Object.entries(C).map(([k, i]) => [k, i >= 0 ? r[i] : null])));
   const hdsd = new Map(rows(qt.Thuoc_HDSD).map(r => [norm(r.ten_thuoc), r]));
   const td = new Map((tdj.Thoi_diem_dung || []).slice(1).filter(r => r && r[1]).map(r => [norm(r[1]), r]));
   const hcn = rows(qt.Hoat_chat_nhom).map(r => ({...r, rx: pyRe(r.tu_khoa), nh: String(r.nhom || "").split(",").map(s => s.trim()).filter(Boolean)})).filter(r => r.rx);
   const tt = rows(qt.Tuong_tac);
+  const qtt = rows(qt.Quy_tac_thuoc).map(r => ({...r, rx: pyRe(r.tu_khoa)})).filter(r => r.rx);
   const dc = rows(qt.Thuoc_dinh_chi).filter(r => !ud(r.trang_thai).startsWith("ngung")).map(r => ({...r, rx: r.tu_khoa_ten ? pyRe(r.tu_khoa_ten) : null}));
   const local = /nho mat|nho tai|nho mui|xit mui|dung ngoai|boi|ngoai da|dat am dao|suc mieng/;
   for (const d of dm) {
@@ -300,7 +301,7 @@ function buildLookup(qt, dmj, tdj) {
       if (h.duong_dung === "uong" && duong && !duong.includes("uong")) continue;
       d.hcs.add(h.hoat_chat); h.nh.forEach(x => d.tags.add(x)); d.tags.add(h.hoat_chat);
     }
-    d.hd = hdsd.get(d.k); d.td = td.get(d.k);
+    d.hd = hdsd.get(d.k); d.td = td.get(d.k); d.qt = qtt.filter(r => r.rx.test(text));
     d.dc = dc.filter(v => v.rx && v.rx.test(ud(d.ten)));
   }
   return {dm, tt, hdsd};
@@ -333,11 +334,12 @@ function showHits() {
 $("q").addEventListener("input", debounce(showHits, 120));
 $("hits").addEventListener("click", e => { const b = e.target.closest(".hit"); if (b) showInfo(D.dm[+b.dataset.i]); });
 function showInfo(d) {
-  const hd = d.hd || {}, row = (k, v) => v != null && v !== "" ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "";
-  const lieu = [hd.max_dv_ngay_nguoi_lon != null ? `Tối đa ${hd.max_dv_ngay_nguoi_lon} đv/ngày (người lớn)` : "", hd.max_dv_ngay_tre_em != null ? `trẻ em ${hd.max_dv_ngay_tre_em}` : "",
-    hd.min_dv_ngay_nguoi_lon != null ? `tối thiểu ${hd.min_dv_ngay_nguoi_lon} đv/ngày` : "", hd.max_dv_ngay_theo_icd ? `theo ICD: ${hd.max_dv_ngay_theo_icd}` : ""].filter(Boolean).join("; ");
-  const tdv = d.td ? [d.td[4], d.td[5], d.td[6]].filter(x => x && x !== "Không nêu").join("; ") : "";
-  // tương tác: các quy tắc liên quan + thuốc trong danh mục ở phía bên kia
+  const hd = d.hd || {}, row = (k, v, cls) => v != null && v !== "" ? `<dt>${k}</dt><dd${cls ? ` class="${cls}"` : ""}>${esc(v)}</dd>` : "";
+  const uniq = a => [...new Set(a.flatMap(x => String(x || "").split(",")).map(x => x.trim()).filter(Boolean))].join(", ");
+  const lieu = [hd.max_dv_ngay_nguoi_lon != null ? `Tối đa ${hd.max_dv_ngay_nguoi_lon} đv/ngày (người lớn)` : "", hd.max_dv_ngay_tre_em != null ? `trẻ em tối đa ${hd.max_dv_ngay_tre_em} đv/ngày` : "",
+    hd.min_dv_ngay_nguoi_lon != null ? `tối thiểu ${hd.min_dv_ngay_nguoi_lon} đv/ngày` : "", hd.max_dv_ngay_theo_icd ? `tối đa theo ICD: ${hd.max_dv_ngay_theo_icd}` : "", hd.min_dv_ngay_theo_icd ? `tối thiểu theo ICD: ${hd.min_dv_ngay_theo_icd}` : ""].filter(Boolean).join("; ");
+  const tdv = d.td ? [d.td[4], d.td[5], d.td[6] ? "trước ăn " + d.td[6] : ""].filter(x => x && x !== "Không nêu").join("; ") : "";
+  const ccd = uniq([hd.icd_ccd, ...d.qt.map(r => r.icd_ccd_tuyet_doi)]), kt = uniq([hd.icd_ccd_kiem_tra]), thtr = uniq(d.qt.map(r => r.icd_than_trong));
   const items = [];
   for (const r of D.tt) {
     const a = String(r.nhom_A).trim(), b = String(r.nhom_B).trim();
@@ -346,21 +348,34 @@ function showInfo(d) {
     if (!ds.length) continue;
     const key = r.muc_do + "|" + ds.join(",");
     const old = items.find(x => x.key === key);
-    if (old) { if (!old.hq.includes(r.hau_qua)) old.hq.push(r.hau_qua); if (!old.xt.includes(r.xu_tri)) old.xt.push(r.xu_tri); old.qd = old.qd || r.qd5948; }
-    else items.push({key, m: r.muc_do, hq: [r.hau_qua], xt: [r.xu_tri], qd: r.qd5948, ds});
+    const add = (arr, v) => { if (v && !arr.includes(v)) arr.push(v); };
+    if (old) { add(old.hq, r.hau_qua); add(old.xt, r.xu_tri); add(old.cc, r.co_che); add(old.ng, r.nguon); old.qd = old.qd || r.qd5948; if (r.dieu_kien_ccd) add(old.dk, r.dieu_kien_ccd); }
+    else items.push({key, m: r.muc_do, hq: [r.hau_qua].filter(Boolean), xt: [r.xu_tri].filter(Boolean), cc: [r.co_che].filter(Boolean), ng: [r.nguon].filter(Boolean), dk: [r.dieu_kien_ccd].filter(Boolean), qd: r.qd5948, ds});
   }
   items.sort((x, y) => (MTT[x.m] ?? 9) - (MTT[y.m] ?? 9));
   const mcls = m => "m" + String(MTT[m] ?? 3).replace(".", "");
   $("info").innerHTML = `<h2>${esc(d.ten)}</h2>
-    ${d.dc.length ? d.dc.map(v => `<div class="issue m1"><div class="t">${esc(v.loai)} – ${esc(v.so_van_ban)} (${esc(v.ngay_van_ban)})</div><p>${esc(v.pham_vi === "Toàn bộ" ? "Toàn bộ các lô" : "Lô " + (v.so_lo || "?") + (v.han_dung ? ", HD " + v.han_dung : ""))}${v.ly_do ? " – " + esc(v.ly_do) : ""}</p></div>`).join("") : ""}
-    <dl class="dl">${row("Hoạt chất", d.hc)}${row("Hàm lượng", d.hl)}${row("Dạng · đường dùng", [d.dang, d.duong].filter(Boolean).join(" · "))}
-    ${row("ICD theo HDSD", hd.icd_HDSD)}${row("ICD có điều kiện", hd.icd_HDSD_co_dieu_kien)}${row("Tuổi", [hd.tuoi_ccd ? "CCĐ dưới " + hd.tuoi_ccd + " tuổi" : "", hd.tuoi_hdsd_tu ? "HDSD từ " + hd.tuoi_hdsd_tu + " tuổi" : ""].filter(Boolean).join("; "))}
-    ${row("Giới hạn liều", lieu)}${row("Liều tóm tắt", hd.lieu_tom_tat)}${row("Thời điểm dùng", tdv)}</dl>
-    <details class="more"><summary>Chỉ định, liều, chống chỉ định theo tờ HDSD</summary><dl class="dl">${row("Chỉ định", d.cd)}${row("Liều dùng", d.lieu)}${row("Cách dùng", d.cach)}${row("Chống chỉ định", d.ccd)}${row("Thận trọng", d.tt)}${row("Có thai, cho con bú", d.pnct)}${row("Tác dụng phụ", d.tdkmm)}</dl>
-    ${d.link ? `<p class="small" style="margin:6px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">Mở tờ HDSD (cần mạng)</a></p>` : ""}</details>
-    <h2>Tương tác với thuốc trong danh mục <span class="small mut">${items.length} quy tắc</span></h2>
-    <div class="tt">${items.length ? items.map(x => `<div class="ttr ${mcls(x.m)}"><b>${esc(x.m)}</b>${x.qd ? " · QĐ 5948" : ""} – ${esc(x.hq.join("; "))}<br><span class="mut">Với: ${esc(x.ds.slice(0, 12).join(", "))}${x.ds.length > 12 ? ` (+${x.ds.length - 12})` : ""}</span><br><span class="small">→ ${esc(x.xt.join(" | "))}</span></div>`).join("") : '<p class="mut small" style="margin:0">Chưa có quy tắc tương tác nào với thuốc khác trong danh mục.</p>'}</div>`;
+    ${d.dc.map(v => `<div class="issue m1"><div class="t">${esc(v.loai)} – ${esc(v.so_van_ban)} (${esc(v.ngay_van_ban)})</div><p>${esc(v.pham_vi === "Toàn bộ" ? "Toàn bộ các lô" : "Lô " + (v.so_lo || "?") + (v.han_dung ? ", HD " + v.han_dung : ""))}${v.ly_do ? " – " + esc(v.ly_do) : ""}${v.so_dang_ky ? " – SĐK " + esc(v.so_dang_ky) : ""}</p>${v.link ? `<a class="small" href="${esc(v.link)}" target="_blank" rel="noopener">Xem văn bản</a>` : ""}</div>`).join("")}
+    <dl class="dl">${row("Hoạt chất", d.hc)}${row("Hàm lượng", d.hl)}${row("Dạng bào chế", d.dang)}${row("Đường dùng", d.duong)}</dl>
+    <h3 class="sec">Quy tắc kê đơn</h3>
+    <dl class="dl">${row("ICD đúng chỉ định", hd.icd_HDSD === "*" ? "Không đối chiếu ICD (thuốc triệu chứng/thủ thuật)" : hd.icd_HDSD)}${row("ICD chỉ định có điều kiện", hd.icd_HDSD_co_dieu_kien)}
+    ${row("ICD bắt buộc kèm", hd.icd_can_kem)}${row("ICD chống chỉ định", ccd, "bad")}${row("ICD chống chỉ định – xác định mức độ", kt, "warnc")}${row("ICD thận trọng", thtr)}
+    ${row("Căn cứ chống chỉ định", hd.ccd_can_cu)}
+    ${row("Tuổi", [hd.tuoi_ccd ? "Chống chỉ định dưới " + hd.tuoi_ccd + " tuổi" : "", hd.tuoi_hdsd_tu ? "HDSD có chỉ định từ " + hd.tuoi_hdsd_tu + " tuổi" : ""].filter(Boolean).join("; "))}
+    ${row("Giới hạn liều", lieu)}${row("Liều tóm tắt", hd.lieu_tom_tat)}${row("Ghi chú quy tắc", hd.ghi_chu)}
+    ${row("Thời điểm dùng", tdv)}${row("Trích HDSD về cách uống", d.td ? d.td[7] : "")}
+    ${row("Nguồn quy tắc", [hd.nguon, hd.trang_thai].filter(Boolean).join(" · "))}</dl>
+    <h3 class="sec">Thông tin theo tờ hướng dẫn sử dụng</h3>
+    <dl class="dl">${row("Chỉ định", d.cd)}${row("Liều dùng", d.lieu)}${row("Cách dùng", d.cach)}${row("Chống chỉ định", d.ccd)}${row("Thận trọng", d.tt)}${row("Phụ nữ có thai, cho con bú", d.pnct)}${row("Tương tác thuốc", d.tuongtac)}${row("Tác dụng không mong muốn", d.tdkmm)}${row("Ghi chú đối chiếu", d.gc)}</dl>
+    ${d.link ? `<p class="small" style="margin:0"><a href="${esc(d.link)}" target="_blank" rel="noopener">Mở tờ HDSD gốc (cần mạng)</a></p>` : ""}
+    <h3 class="sec">Tương tác với thuốc trong danh mục <span class="small mut">${items.length} nhóm</span></h3>
+    <div class="tt">${items.length ? items.map(x => `<div class="ttr ${mcls(x.m)}"><b>${esc(x.m)}</b>${x.qd ? " · QĐ 5948" : ""} – ${esc(x.hq.join("; "))}${x.dk.length ? `<br><span class="small">Điều kiện: ${esc(x.dk.join("; "))}</span>` : ""}<br><span class="mut">Với: ${esc(x.ds.join(", "))}</span><br><span class="small">Cơ chế: ${esc(x.cc.join("; "))}</span><br><span class="small">→ ${esc(x.xt.join(" | "))}</span><br><span class="small mut">Nguồn: ${esc(x.ng.join("; "))}</span></div>`).join("") : '<p class="mut small" style="margin:0">Chưa có quy tắc tương tác nào với thuốc khác trong danh mục.</p>'}</div>`;
   $("info").hidden = false; $("info").scrollIntoView({behavior: "smooth", block: "start"});
+}
+function moThuoc(ten) {
+  const k = norm(ten), d = D && (D.dm.find(x => x.k === k) || D.dm.find(x => x.k.replace(/ /g, "") === k.replace(/ /g, "")));
+  if (!d) return;
+  tab("tc"); $("q").value = d.ten; showHits(); showInfo(d);
 }
 showHits();
 
@@ -440,3 +455,5 @@ $("installno").onclick = () => { $("installbox").hidden = true; try { localStora
 addEventListener("appinstalled", () => { $("installbox").hidden = true; });
 // Chrome chưa báo được (đang tải lần đầu, hoặc trình duyệt khác): vẫn hiện hướng dẫn thủ công sau vài giây
 setTimeout(() => { if (!standalone() && !hideInstall && $("installbox").hidden) { $("installbox").hidden = false; } }, 6000);
+
+document.addEventListener("click", e => { const b = e.target.closest("[data-thuoc]"); if (b) moThuoc(b.dataset.thuoc); });
