@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f6e63">
+<title>Rà soát đơn</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<style>
+/* Layout: một cột kiểu ứng dụng điện thoại – 3 bước (ảnh → dữ liệu đơn → kết quả), thẻ vấn đề có dải màu theo mức độ */
+:root{
+  --bg:#f3f6f6; --surface:#ffffff; --fg:#14211f; --mut:#5a6b68; --line:#d5dfdd; --acc:#0f6e63; --acc-ink:#ffffff; --soft:#e3efec;
+  --crit:#b3261e; --crit-bg:#fbe9e7; --warn:#9a5b00; --warn-bg:#fff3d6; --info:#2a5d8f; --info-bg:#e6eff8; --ok:#2e7d4f;
+  --f-body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; --f-mono:ui-monospace,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0e1514; --surface:#16201e; --fg:#e2ebe9; --mut:#97a8a4; --line:#2a3735; --acc:#4fc2ad; --acc-ink:#062420; --soft:#1c2b28;
+  --crit:#ff8a80; --crit-bg:#3a1714; --warn:#f2b54c; --warn-bg:#33270e; --info:#8cbcec; --info-bg:#142536; --ok:#7fd3a0; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e1514; --surface:#16201e; --fg:#e2ebe9; --mut:#97a8a4; --line:#2a3735; --acc:#4fc2ad; --acc-ink:#062420; --soft:#1c2b28;
+  --crit:#ff8a80; --crit-bg:#3a1714; --warn:#f2b54c; --warn-bg:#33270e; --info:#8cbcec; --info-bg:#142536; --ok:#7fd3a0; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--f-body);
+  padding:16px max(16px,env(safe-area-inset-right,0px)) calc(32px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px))}
+main{max-width:640px;margin:0 auto;display:grid;gap:14px}
+header{display:grid;gap:6px;padding-top:max(0px,env(safe-area-inset-top,0px))}
+h1{font-size:1.35rem;line-height:1.25;margin:0;font-weight:700;text-wrap:balance}
+h2{font-size:1rem;margin:0;font-weight:600;display:flex;align-items:center;gap:8px}
+.step{font:500 .72rem var(--f-mono);background:var(--acc);color:var(--acc-ink);border-radius:999px;width:22px;height:22px;display:inline-grid;place-items:center;flex:none}
+.mut{color:var(--mut)} .small{font-size:.82rem}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:.75rem;padding:2px 9px;border-radius:999px;background:var(--soft);color:var(--mut);border:1px solid var(--line)}
+.chip.ok{color:var(--ok)} .chip.bad{color:var(--crit)}
+section.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;gap:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button,.btn{font:600 .92rem var(--f-body);border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--fg);padding:11px 14px;cursor:pointer;min-height:44px}
+button.primary,.btn.primary{background:var(--acc);color:var(--acc-ink);border-color:var(--acc)}
+button:disabled{opacity:.5;cursor:default}
+button:focus-visible,input:focus-visible,textarea:focus-visible,.btn:focus-within{outline:2px solid var(--acc);outline-offset:2px}
+.btn input{position:absolute;opacity:0;width:1px;height:1px}
+.btn{position:relative;display:inline-flex;align-items:center;justify-content:center;flex:1 1 140px}
+label{font-size:.78rem;color:var(--mut);display:grid;gap:3px}
+input,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px;width:100%;min-width:0}
+textarea{resize:vertical;min-height:42px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.drug{border:1px solid var(--line);border-radius:10px;padding:10px;display:grid;gap:8px;background:var(--bg)}
+.drug .top{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:end}
+.drug .qty{display:grid;grid-template-columns:90px 110px;gap:8px}
+.x{min-height:36px;padding:6px 10px;font-size:.8rem}
+.thumbs{display:flex;gap:8px;flex-wrap:wrap}
+.thumbs img{width:72px;height:96px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+.status{font-size:.86rem;padding:8px 10px;border-radius:8px;background:var(--soft)}
+.status.err{background:var(--crit-bg);color:var(--crit)}
+.sum{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sum div{border-radius:10px;padding:8px 10px;font-size:.78rem}
+.sum b{display:block;font-size:1.4rem;line-height:1.1;font-variant-numeric:tabular-nums}
+.s1{background:var(--crit-bg);color:var(--crit)} .s2{background:var(--warn-bg);color:var(--warn)} .s3{background:var(--info-bg);color:var(--info)}
+.issue{border:1px solid var(--line);border-left:5px solid var(--info);border-radius:10px;padding:10px 12px;display:grid;gap:4px;background:var(--surface)}
+.issue.m1{border-left-color:var(--crit)} .issue.m2{border-left-color:var(--warn)}
+.issue .h{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pill{font-size:.7rem;font-weight:600;padding:1px 8px;border-radius:999px}
+.issue .t{font-weight:600}
+.issue p{margin:0;font-size:.88rem}
+.issue .dx{font-size:.86rem;color:var(--acc)}
+.issue .cc{font-size:.75rem;color:var(--mut);word-break:break-word}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:560px;font-size:.8rem}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600} td.n{text-align:right;font-variant-numeric:tabular-nums}
+.ai{white-space:pre-wrap;font-size:.9rem;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
+.note{font-size:.78rem;color:var(--mut);border-left:3px solid var(--line);padding-left:10px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:380px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Rà soát đơn ngoại trú</h1>
+  <div class="chips">
+    <span class="chip" id="eng">Đang tải bộ quy tắc…</span>
+    <span class="chip" id="ver">Bộ quy tắc…</span>
+    <span class="chip" id="net"></span>
+  </div>
+  <div class="row">
+    <button id="chk" type="button" class="x">Kiểm tra cập nhật</button>
+    <button id="upd" type="button" class="x primary" hidden>Có bản mới – bấm để dùng</button>
+  </div>
+</header>
+
+<section class="card" aria-labelledby="h1s">
+  <h2 id="h1s"><span class="step">1</span>Chụp đơn thuốc</h2>
+  <div class="row">
+    <label class="btn primary" for="cam">Chụp ảnh đơn<input id="cam" type="file" accept="image/*" capture="environment"></label>
+    <label class="btn" for="pick">Chọn ảnh có sẵn<input id="pick" type="file" accept="image/*" multiple></label>
+  </div>
+  <div class="thumbs" id="thumbs"></div>
+  <div class="status" id="st">Chụp thẳng, đủ sáng, cả tờ đơn nằm trong khung. Đơn nhiều trang thì chọn nhiều ảnh cùng lúc. Đọc chữ ngay trên điện thoại, không cần mạng.</div>
+  <details id="rawbox" hidden><summary class="small mut">Xem chữ đọc được từ ảnh</summary><pre class="ai" id="raw"></pre></details>
+  <p class="note">Ảnh và chữ đọc được chỉ nằm trên điện thoại này, không gửi đi đâu và không lưu lại sau khi đóng ứng dụng.</p>
+</section>
+
+<section class="card" aria-labelledby="h2s">
+  <h2 id="h2s"><span class="step">2</span>Kiểm tra dữ liệu đơn <span class="mut small" id="src"></span></h2>
+  <div class="grid2">
+    <label for="tuoi">Tuổi<input id="tuoi" inputmode="decimal" autocomplete="off"></label>
+    <label for="ngay">Ngày kê (dd/mm/yyyy)<input id="ngay" inputmode="numeric" autocomplete="off"></label>
+  </div>
+  <label for="icd1">ICD bệnh chính<input id="icd1" autocomplete="off" autocapitalize="characters"></label>
+  <label for="icd2">ICD bệnh kèm theo (cách nhau dấu phẩy)<input id="icd2" autocomplete="off" autocapitalize="characters"></label>
+  <label for="cdoan">Chẩn đoán (chữ)<input id="cdoan" autocomplete="off"></label>
+  <div id="drugs" style="display:grid;gap:8px"></div>
+  <datalist id="dmlist"></datalist>
+  <datalist id="dvlist"><option value="Viên"></option><option value="Gói"></option><option value="Ống"></option><option value="Chai"></option><option value="Lọ"></option><option value="Tuýp"></option><option value="Bút"></option><option value="Túi"></option></datalist>
+  <div class="row">
+    <button id="add" type="button">+ Thêm thuốc</button>
+    <button id="run" class="primary" type="button" style="flex:1" disabled>Rà soát đơn</button>
+  </div>
+</section>
+
+<section class="card" aria-labelledby="h3s" id="kq">
+  <h2 id="h3s"><span class="step">3</span>Kết quả rà soát</h2>
+  <div class="status" id="kqst">Kết quả hiện ở đây sau khi bấm Rà soát đơn.</div>
+  <div class="sum" id="sum" hidden>
+    <div class="s1"><b id="c1">0</b>Nghiêm trọng</div>
+    <div class="s2"><b id="c2">0</b>Cần lưu ý</div>
+    <div class="s3"><b id="c3">0</b>Tham khảo</div>
+  </div>
+  <div id="issues" style="display:grid;gap:8px"></div>
+  <div id="ctwrap" hidden>
+    <h2 style="margin-bottom:6px">Chi tiết từng thuốc</h2>
+    <div class="wrap"><table><thead><tr><th>Thuốc</th><th>Hoạt chất</th><th>ĐV/ngày</th><th>Số ngày</th><th>ICD theo HDSD</th><th>Căn cứ</th><th>Danh mục</th></tr></thead><tbody id="ct"></tbody></table></div>
+  </div>
+  <div class="row" id="acts" hidden>
+    <button id="copy" type="button">Sao chép kết quả</button>
+    <button id="share" type="button">Gửi qua Zalo/tin nhắn</button>
+  </div>
+  <p class="note">Sàng lọc tự động theo bộ quy tắc của Khoa Dược (HDSD, điều kiện BHYT, QĐ 5948/QĐ-BYT, cảnh giác dược, công văn thu hồi). Dược sĩ xác nhận trước khi trao đổi với bác sĩ. Kết quả gửi đi chỉ có tuổi, ICD và thuốc, không có họ tên.</p>
+</section>
+</main>
+<script src="vendor/pyodide/pyodide.js"></script>
+<script src="vendor/tesseract/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,142 @@
+# -*- coding: utf-8 -*-
+"""Đối chiếu công văn/quyết định ĐÌNH CHỈ LƯU HÀNH, THU HỒI, VI PHẠM CHẤT LƯỢNG với danh mục thuốc bệnh viện.
+Dữ liệu: sheet Thuoc_dinh_chi trong Bang_tra_cuu_ra_soat.xlsx (mỗi văn bản × thuốc một dòng).
+Cột: ngay_van_ban, so_van_ban, co_quan, loai, muc_vi_pham, pham_vi, ten_thuoc, tu_khoa_ten, hoat_chat, ham_luong,
+     so_dang_ky, so_lo, han_dung, co_so_san_xuat, ly_do, link, trang_thai, ghi_chu
+- loai: Đình chỉ lưu hành | Thu hồi | Vi phạm chất lượng | Rút số đăng ký | Thuốc giả
+- pham_vi: "Toàn bộ" (mọi lô) | "Lô" (chỉ các lô ghi trong so_lo)
+- tu_khoa_ten: regex (bỏ dấu, chữ thường) khớp tên thuốc trong danh mục/đơn; để trống → dùng ten_thuoc
+- trang_thai bắt đầu "Ngừng áp dụng" → bỏ qua"""
+import re, datetime, unicodedata, difflib
+
+
+def ud(s):
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+
+
+def _date(x):
+    if isinstance(x, datetime.datetime): return x.date()
+    if isinstance(x, datetime.date): return x
+    s = str(x or "").strip()
+    for f in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y", "%d-%m-%Y"):
+        try: return datetime.datetime.strptime(s[:10], f).date()
+        except Exception: pass
+    m = re.fullmatch(r"(\d{2})(\d{2})(\d{2})", s)          # 200428 = 20/04/2028
+    if m:
+        try: return datetime.date(2000 + int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except Exception: return None
+    return None
+
+
+def _nums(s):
+    return set(re.findall(r"\d+(?:[.,]\d+)?", ud(s).replace(",", ".")))
+
+
+def _goc(s):
+    """Tên gốc để so khớp: bỏ hàm lượng, dạng bào chế."""
+    t = ud(s)
+    t = re.sub(r"\b(tablets?|vien nen|vien nang|bao phim|capsules?|tab|cap|inj|injection|solution|for infusion)\b", " ", t)
+    t = re.sub(r"\d+(?:[.,]\d+)?\s*(mg|g|mcg|ml|iu|ui|%)?(/\s*\d*\s*(ml|g))?", " ", t)
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+def doc(rows_fn):
+    out = []
+    for r in rows_fn("Thuoc_dinh_chi"):
+        if not r.get("ten_thuoc"): continue
+        if ud(r.get("trang_thai")).startswith("ngung ap dung"): continue
+        tk = str(r.get("tu_khoa_ten") or "").strip()
+        try: rx = re.compile(tk) if tk else None
+        except re.error: rx = None
+        out.append(dict(r, _rx=rx, _goc=_goc(r["ten_thuoc"]), _hd=_date(r.get("han_dung")), _ngay=_date(r.get("ngay_van_ban"))))
+    return out
+
+
+def con_hieu_luc(v, hom_nay=None):
+    """False nếu chỉ thu hồi theo lô và lô đã hết hạn dùng."""
+    hom_nay = hom_nay or datetime.date.today()
+    if str(v.get("pham_vi") or "").lower().startswith("lo") or ud(v.get("pham_vi")).startswith("lo"):
+        return not (v["_hd"] and v["_hd"] < hom_nay)
+    return True
+
+
+def khop(v, ten, hl=None):
+    """Trả 'khớp tên' / 'gần đúng' / None khi so 1 tên thuốc (danh mục hoặc đơn) với 1 dòng văn bản."""
+    t = ud(ten)
+    if v["_rx"] is not None:
+        if not v["_rx"].search(t): return None
+        kq = "khớp tên"
+    else:
+        g = _goc(ten)
+        if not g or not v["_goc"]: return None
+        if g == v["_goc"] or re.search(r"\b" + re.escape(v["_goc"]) + r"\b", g) or re.search(r"\b" + re.escape(g) + r"\b", v["_goc"]):
+            kq = "khớp tên"
+        elif difflib.SequenceMatcher(None, g, v["_goc"]).ratio() >= 0.88:
+            kq = "gần đúng"
+        else:
+            return None
+    # hàm lượng: nếu cả hai có số mà không trùng số nào → coi là khác sản phẩm
+    a, b = _nums(hl or ten), _nums(v.get("ham_luong") or v["ten_thuoc"])
+    if a and b and not (a & b): return None
+    return kq
+
+
+def muc_canh_bao(v, hom_nay=None):
+    loai = ud(v.get("loai")); pv = ud(v.get("pham_vi"))
+    if not con_hieu_luc(v, hom_nay): return "Tham khảo"
+    if "rut so dang ky" in loai: return "Tham khảo"
+    if "dinh chi" in loai or "gia" in loai or pv.startswith("toan"): return "Nghiêm trọng"
+    m = re.search(r"\d", str(v.get("muc_vi_pham") or ""))
+    if m and m.group(0) == "1": return "Nghiêm trọng"
+    return "Cần lưu ý"
+
+
+def mo_ta(v):
+    p = [f"{v.get('so_van_ban') or ''} ({v.get('co_quan') or 'Cục QLD'}, {v.get('ngay_van_ban') or ''})".strip(),
+         str(v.get("loai") or "")]
+    if v.get("muc_vi_pham"): p.append(f"vi phạm {v['muc_vi_pham']}")
+    pv = ud(v.get("pham_vi"))
+    p.append("TOÀN BỘ các lô" if pv.startswith("toan") else f"lô {v.get('so_lo') or '?'}" + (f", HD {v.get('han_dung')}" if v.get("han_dung") else ""))
+    if v.get("so_dang_ky"): p.append(f"SĐK {v['so_dang_ky']}")
+    if v.get("co_so_san_xuat"): p.append(str(v["co_so_san_xuat"]))
+    if v.get("ly_do"): p.append("Lý do: " + str(v["ly_do"]))
+    return " – ".join(x for x in p if x)
+
+
+def de_xuat(v):
+    loai = ud(v.get("loai")); pv = ud(v.get("pham_vi"))
+    if "rut so dang ky" in loai:
+        return "Thuốc được lưu hành đến hết hạn dùng; lưu ý kế hoạch mua sắm/đấu thầu, chuẩn bị thuốc thay thế."
+    if pv.startswith("toan") or "dinh chi" in loai:
+        return "NGỪNG kê đơn/cấp phát; biệt trữ toàn bộ thuốc tồn kho, trả nhà cung cấp; báo khoa lâm sàng đổi thuốc thay thế."
+    return "Kiểm tra số lô tồn kho và số lô đã cấp phát; nếu trùng lô bị thu hồi: ngừng cấp phát, biệt trữ, trả nhà cung cấp, thu hồi thuốc đã cấp cho BN."
+
+
+def doi_chieu_danh_muc(ds, dm, hom_nay=None):
+    """Danh sách thuốc trong danh mục bệnh viện trùng với văn bản đình chỉ/thu hồi."""
+    out = []
+    for v in ds:
+        for info in dm.values():
+            kq = khop(v, info.get("ten") or "", info.get("hl"))
+            if not kq: continue
+            out.append(dict(muc=muc_canh_bao(v, hom_nay), hieu_luc="Còn hiệu lực" if con_hieu_luc(v, hom_nay) else "Lô đã hết hạn dùng",
+                            thuoc_dm=info.get("ten"), hc_dm=info.get("hc"), hl_dm=info.get("hl"), khop=kq,
+                            ten_vb=v.get("ten_thuoc"), so_dang_ky=v.get("so_dang_ky"), so_lo=v.get("so_lo"), han_dung=v.get("han_dung"),
+                            loai=v.get("loai"), muc_vi_pham=v.get("muc_vi_pham"), pham_vi=v.get("pham_vi"),
+                            so_van_ban=v.get("so_van_ban"), ngay_van_ban=v.get("ngay_van_ban"), co_quan=v.get("co_quan"),
+                            co_so_san_xuat=v.get("co_so_san_xuat"), ly_do=v.get("ly_do"), de_xuat=de_xuat(v), link=v.get("link"),
+                            trang_thai=v.get("trang_thai")))
+    TH = {"Nghiêm trọng": 0, "Cần lưu ý": 1, "Tham khảo": 2}
+    out.sort(key=lambda x: (TH.get(x["muc"], 9), str(x["thuoc_dm"])))
+    return out
+
+
+def tim_cho_thuoc(ds, ten, hl=None, hom_nay=None):
+    """Các văn bản còn hiệu lực áp dụng cho 1 thuốc trong đơn (bỏ rút SĐK và lô đã hết hạn)."""
+    out = []
+    for v in ds:
+        if not con_hieu_luc(v, hom_nay) or "rut so dang ky" in ud(v.get("loai")): continue
+        kq = khop(v, ten, hl)
+        if kq: out.append((v, kq))
+    return out

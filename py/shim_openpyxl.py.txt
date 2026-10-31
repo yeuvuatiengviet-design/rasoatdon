@@ -1,0 +1,16 @@
+# Thay thế tối giản cho openpyxl khi chạy trong trình duyệt: đọc bảng từ file <đường dẫn>.json
+import json
+class _WS:
+    def __init__(s, title, rows): s.title = title; s._r = rows
+    def iter_rows(s, min_row=1, values_only=True, **k):
+        for r in s._r[min_row - 1:]: yield tuple(r)
+    @property
+    def max_row(s): return len(s._r)
+class _WB:
+    def __init__(s, d):
+        s.sheetnames = list(d); s.worksheets = [_WS(k, v) for k, v in d.items()]
+    def __getitem__(s, k): return s.worksheets[s.sheetnames.index(k)]
+def load_workbook(path, **k):
+    with open(str(path) + ".json", encoding="utf-8") as f: return _WB(json.load(f))
+class Workbook:
+    def __init__(s, *a, **k): raise RuntimeError("Không hỗ trợ ghi Excel trong ứng dụng")

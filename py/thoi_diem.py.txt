@@ -1,0 +1,304 @@
+# -*- coding: utf-8 -*-
+"""Thời điểm dùng thuốc (trước/sau/trong bữa ăn, lúc đói; sáng/trưa/chiều/tối/trước ngủ) theo tờ HDSD.
+
+Nguồn: cột Liều dùng + Cách dùng của danh mục thông tin thuốc (trích tự động, có câu trích dẫn),
+DS có thể hiệu chỉnh trong references/Thoi_diem_dung_thuoc.xlsx (cột "DS hiệu chỉnh – ..." được ưu tiên).
+
+Dùng:
+  python3 thoi_diem.py tra-cuu "omeprazol" ["metformin" ...]    # tra theo tên thuốc hoặc hoạt chất
+  python3 thoi_diem.py tao-bang [--danh-muc DM.xlsx]            # tạo lại bảng từ danh mục, GIỮ cột DS hiệu chỉnh cũ
+"""
+import re, os, sys, argparse, unicodedata
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REF = os.path.join(HERE, "..", "references")
+DM_MAC_DINH = os.path.join(REF, "Danh_muc_thong_tin_thuoc.xlsx")
+BANG_MAC_DINH = os.path.join(REF, "Thoi_diem_dung_thuoc.xlsx")
+
+
+def ud(s):
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+
+
+def norm(s):
+    return re.sub(r"\s+", " ", ud(s)).strip()
+
+
+# ---------------- nhãn ----------------
+BUA = {  # thứ tự hiển thị
+    "luc_doi": "Lúc đói (xa bữa ăn)",
+    "truoc_an": "Trước ăn",
+    "trong_bua": "Trong/cùng bữa ăn",
+    "sau_an": "Sau ăn",
+    "khong_phu_thuoc": "Không phụ thuộc bữa ăn",
+}
+BUOI = {
+    "sang": "Sáng", "trua": "Trưa", "chieu": "Chiều", "toi": "Tối",
+    "truoc_ngu": "Trước khi ngủ", "co_dinh": "Cố định giờ mỗi ngày",
+}
+PRE, POST = {"luc_doi", "truoc_an"}, {"trong_bua", "sau_an"}
+
+_AN = r"(?:cac |moi )?(?:bua an|bua|khi an|an)\b"
+P_KPT = re.compile(
+    r"khong phu thuoc (?:vao )?(?:bua an|thuc an|bua|viec an)|bat ky (?:luc|thoi diem|thoi gian|gio) nao"
+    r"|(?:co|kem|cung) hoac khong (?:kem |co |cung )?(?:voi )?(?:thuc an|bua an|an)"
+    r"|trong hoac (?:ngoai|xa) bua an|truoc,? (?:trong )?hoac sau (?:khi |bua )?an|truoc hoac sau (?:khi |bua )?an|trong hoac ngoai bua an"
+    r"|khong (?:bi )?anh huong (?:boi|cua) (?:thuc an|bua an)|khong lien quan (?:den |toi )?(?:bua an|thuc an)")
+P_BUA = [
+    ("luc_doi", re.compile(r"(?:luc|khi|bung) doi|da day (?:rong|trong)|xa bua an|xa bua"
+                           r"|\d+\s*gio truoc (?:khi |bua )?an.{0,25}(?:hoac|va).{0,10}\d+\s*gio sau")),
+    ("truoc_an", re.compile(r"truoc " + _AN + r"|truoc an (?:sang|trua|toi)|truoc bua (?:an )?(?:sang|trua|toi)")),
+    ("trong_bua", re.compile(r"trong (?:bua|khi) an|cung (?:voi )?(?:bua an|bua|thuc an|thuc pham|luc an)"
+                             r"|voi (?:bua an|thuc an|bua)|vao (?:cac |moi )?bua|(?:luc|khi|trong) an (?:sang|trua|toi)|(?:cung|trong) hoac sau (?:khi |bua )?an|giua bua an|dau bua an|ngay khi (?:bat dau )?an|kem (?:theo )?thuc an")),
+    ("sau_an", re.compile(r"(?:cung|trong) hoac sau (?:khi |bua )?an|sau " + _AN + r"|luc no|sau an (?:sang|trua|toi)|sau bua (?:an )?(?:sang|trua|toi)")),
+]
+P_BUOI = [
+    ("sang", re.compile(r"buoi sang|vao sang|sang som|moi sang|luc sang|an sang|bua sang|ngu day")),
+    ("trua", re.compile(r"buoi trua|bua trua|an trua")),
+    ("chieu", re.compile(r"buoi chieu|bua chieu")),
+    ("toi", re.compile(r"buoi toi|bua toi|an toi|vao toi|moi toi|luc toi|sang (?:va|hoac|,) (?:buoi )?toi|(?:va|hoac) toi\b")),
+    ("truoc_ngu", re.compile(r"truoc (?:khi )?(?:di )?ngu|truoc gio (?:di )?ngu|luc (?:di )?ngu|gio di ngu|khi di ngu")),
+    ("co_dinh", re.compile(r"(?:cung|mot) (?:mot )?(?:thoi diem|gio|thoi gian) (?:moi|trong|hang) ngay|vao cung (?:mot )?(?:thoi diem|gio)")),
+]
+_SO = r"(\d+(?:[/,.]\d+)?\s*(?:-|–|den)?\s*\d*\s*(?:phut|gio))"
+P_PHUT = re.compile(_SO + r"\s*truoc (?:khi |cac |moi )?(?:bua )?an"
+                    r"|truoc (?:khi |cac |moi )?(?:bua )?an\s*(?:it nhat |khoang )?" + _SO)
+
+
+def _cau(text):
+    """Tách câu, trả về (câu gốc, câu không dấu) – không dùng chỉ số ký tự vì NFD đổi độ dài."""
+    out = []
+    for c in re.split(r"(?<=[.;!?])\s+|\n+|•|(?<=\))\s*-\s+", str(text or "")):
+        c = c.strip(" -–\t")
+        if c: out.append((c, ud(c)))
+    return out
+
+
+P_NGU_CANH_RIENG = re.compile(r"phau thuat|gay me|noi soi|xet nghiem|chup|thu thuat|truoc mo|sau mo")
+P_BO_BUOI = re.compile(r"lieu thu (?:hai|2|ba|3)|vien thu (?:hai|2)|ngung thuoc|giam lieu tu tu")
+P_XA_BUA = re.compile(r"truoc (?:khi |bua )?an[^.;]{0,25}(?:hoac|va) sau (?:khi |bua )?an[^.;]{0,20}(?:\d+|vai) gio"
+                      r"|truoc hoac sau (?:khi |bua )?an[^.;]{0,10}(?:\d+|vai) gio")
+P_KPT2 = re.compile(r"(?:vao |trong |cung )?bua an hoac (?:luc|khi) doi|(?:luc|khi) doi hoac (?:sau|trong|vao|cung) (?:bua |khi )?an")
+P_PHU_DINH = re.compile(r"(?:tranh|khong (?:nen )?(?:dung|uong))[^.;]{0,20}$")
+
+
+def trich_thoi_diem(*texts, chinh=None):
+    """Trả dict(bua=set, buoi=set, phut=str, trich=[câu gốc]).
+    texts: các đoạn văn; chinh: chỉ số đoạn là 'Cách dùng' (buổi trong ngày lấy ưu tiên từ đoạn này;
+    ở đoạn khác chỉ lấy khi câu có '1 lần/ngày'). Bỏ câu thuộc ngữ cảnh phẫu thuật/gây mê/nội soi."""
+    bua, buoi, trich, phut = set(), set(), [], ""
+    buoi_phu = set()
+    for ti, t in enumerate(texts):
+        for goc, u in _cau(t):
+            if P_NGU_CANH_RIENG.search(u): continue
+            hit = False
+            u2 = u
+            if P_XA_BUA.search(u2):
+                bua.add("luc_doi"); hit = True; u2 = P_XA_BUA.sub(" ", u2)
+            if P_KPT2.search(u2):
+                bua.add("khong_phu_thuoc"); hit = True; u2 = P_KPT2.sub(" ", u2)
+            if P_KPT.search(u2):
+                bua.add("khong_phu_thuoc"); hit = True; u2 = P_KPT.sub(" ", u2)
+            for k, p in P_BUA:
+                if p.search(u2): bua.add(k); hit = True
+            for k, p in P_BUOI:
+                mb = p.search(u)
+                if mb and (P_BO_BUOI.search(u) or P_PHU_DINH.search(u[:mb.start()])): continue
+                if mb:
+                    if chinh is None or ti == chinh: buoi.add(k); hit = True
+                    elif re.search(r"(?:1|mot) lan(?:/| moi | trong )?ngay|1 lan duy nhat|mot lan duy nhat|x 1 lan", u):
+                        buoi_phu.add(k); hit = True
+            m = P_PHUT.search(u)
+            if m and not phut: phut = (m.group(1) or m.group(2)).replace("phut", "phút").replace("gio", "giờ") + " trước ăn"
+            if hit and goc not in trich: trich.append(goc)
+    return dict(bua=bua, buoi=buoi or buoi_phu, phut=phut, trich=trich)
+
+
+def nhan(keys, M):
+    return "; ".join(M[k] for k in M if k in keys)
+
+
+def tu_nhan(text, M):
+    """Đọc lại nhãn DS gõ (vd 'Trước ăn; Sáng') → set khóa."""
+    u = ud(text)
+    out = set(k for k, v in M.items() if ud(v).split(" (")[0] in u)
+    if M is BUA and "luc doi" in u: out.add("luc_doi")
+    if M is BUA and ("khong phu thuoc" in u or "bat ky" in u): out.add("khong_phu_thuoc")
+    if M is BUOI and ("truoc ngu" in u or "di ngu" in u): out.add("truoc_ngu")
+    return out
+
+
+def la_uong(duong, dang=""):
+    u = ud(duong) + " " + ud(dang)
+    if re.search(r"tiem|truyen|nho (mat|mui|tai)|boi|dan|dat|xit|hit|khi dung|thut|dung ngoai|suc mieng", ud(duong)) and "uong" not in ud(duong):
+        return False
+    return bool(re.search(r"uong|ngam|nhai|vien|goi|siro|hon dich uong|dung dich uong|cốm|com", u)) or not ud(duong).strip()
+
+
+# ---------------- bảng tra cứu ----------------
+COLS = ["STT", "Tên thuốc", "Hoạt chất", "Đường dùng", "Liên quan bữa ăn (HDSD)", "Thời điểm trong ngày (HDSD)",
+        "Khoảng cách trước ăn", "Trích dẫn HDSD (Liều dùng/Cách dùng)", "Nguồn HDSD", "Link tờ HDSD",
+        "DS hiệu chỉnh – Bữa ăn", "DS hiệu chỉnh – Thời điểm", "Ghi chú DS"]
+
+
+def _nguon(link, gc):
+    link, g = str(link or ""), ud(gc)
+    if not link: return "Chưa có tờ HDSD"
+    if "drive.google" not in link: return "Nguồn web"
+    if "tai lieu thong tin" in g: return "Tài liệu thông tin thuốc"
+    if any(k in g for k in ("nguon web", "danh may lai", "khong phai ban scan")): return "PDF nguồn web"
+    return "Tờ HDSD (Drive)"
+
+
+def tao_bang(dm_path=DM_MAC_DINH, out=BANG_MAC_DINH):
+    ws = openpyxl.load_workbook(dm_path, read_only=True, data_only=True).worksheets[0]
+    rows = list(ws.iter_rows(values_only=True))
+    h = [ud(c).strip() if c else "" for c in rows[0]]
+    ix = lambda k: next((i for i, x in enumerate(h) if k in x), None)
+    I = dict(stt=ix("stt"), ten=ix("ten thuoc"), hc=ix("hoat chat"), dang=ix("dang bao che"), duong=ix("duong dung"),
+             lieu=ix("lieu dung"), cach=ix("cach dung"), link=ix("to huong dan"), gc=ix("ghi chu"))
+    cu = {}
+    if os.path.exists(out):
+        try:
+            for r in openpyxl.load_workbook(out, read_only=True).worksheets[0].iter_rows(min_row=2, values_only=True):
+                if r and r[1] and any(r[10:13]): cu[norm(r[1])] = r[10:13]
+        except Exception: pass
+    data, seen = [], set()
+    for r in rows[1:]:
+        g = lambda k: r[I[k]] if I[k] is not None and I[k] < len(r) else None
+        ten = g("ten")
+        if not ten or norm(ten) in seen: continue
+        seen.add(norm(ten))
+        if not la_uong(g("duong"), g("dang")): continue
+        t = trich_thoi_diem(g("lieu"), g("cach"), chinh=1)
+        ds = cu.get(norm(ten), (None, None, None))
+        data.append([g("stt"), ten, g("hc"), g("duong"), nhan(t["bua"], BUA) or "Không nêu",
+                     nhan(t["buoi"], BUOI) or "Không nêu", t["phut"], "\n".join(x[:220] for x in t["trich"][:4]),
+                     _nguon(g("link"), g("gc")), g("link"), *ds])
+    wb = openpyxl.Workbook(); w = wb.active; w.title = "Thoi_diem_dung"
+    w.append(COLS)
+    for d in data: w.append(d)
+    widths = [6, 28, 26, 12, 22, 20, 14, 70, 16, 30, 18, 18, 30]
+    for i, c in enumerate(w[1]):
+        c.font = Font(bold=True, color="FFFFFF"); c.alignment = Alignment(wrap_text=True, vertical="center")
+        c.fill = PatternFill("solid", fgColor="375623" if i >= 10 else "1F4E78")
+        w.column_dimensions[c.column_letter].width = widths[i]
+    y = PatternFill("solid", fgColor="FFF2CC")
+    for row in w.iter_rows(min_row=2):
+        for c in row: c.alignment = Alignment(wrap_text=True, vertical="top")
+        if row[8].value != "Tờ HDSD (Drive)": row[8].fill = y
+        if row[4].value == "Không nêu": row[4].fill = PatternFill("solid", fgColor="EDEDED")
+    w.freeze_panes = "C2"; w.auto_filter.ref = w.dimensions
+    g2 = wb.create_sheet("Huong_dan")
+    for line in [
+        "Bảng thời điểm dùng thuốc (đường uống) – trích TỰ ĐỘNG từ cột Liều dùng + Cách dùng của danh mục thông tin thuốc.",
+        "Cột 'Trích dẫn HDSD' là câu gốc làm căn cứ; 'Không nêu' = danh mục không ghi thời điểm (cần xem tờ HDSD).",
+        "DS hiệu chỉnh: gõ nhãn vào cột xanh lá – Bữa ăn: Lúc đói / Trước ăn / Trong bữa ăn / Sau ăn / Không phụ thuộc bữa ăn;",
+        "  Thời điểm: Sáng / Trưa / Chiều / Tối / Trước khi ngủ / Cố định giờ mỗi ngày (nhiều nhãn cách nhau bằng ';').",
+        "Script rà soát ưu tiên cột DS hiệu chỉnh. Khi tạo lại bảng (thoi_diem.py tao-bang) các cột DS được giữ theo tên thuốc.",
+        "Nguồn khác 'Tờ HDSD (Drive)' tô vàng: nguồn web/tài liệu thông tin/chưa có tờ – kết quả chỉ tham khảo."]:
+        g2.append([line])
+    g2.column_dimensions["A"].width = 130
+    wb.save(out)
+    return data
+
+
+def doc_bang(path=BANG_MAC_DINH):
+    """→ dict norm(tên) → dict(bua, buoi, phut, trich, nguon, ds)"""
+    if not os.path.exists(path): return {}
+    out = {}
+    for r in openpyxl.load_workbook(path, read_only=True, data_only=True).worksheets[0].iter_rows(min_row=2, values_only=True):
+        if not r or not r[1]: continue
+        r = list(r) + [None] * (13 - len(r))
+        ds_b, ds_t = tu_nhan(r[10], BUA) if r[10] else None, tu_nhan(r[11], BUOI) if r[11] else None
+        out[norm(r[1])] = dict(
+            ten=r[1], hc=r[2], bua=ds_b if ds_b is not None else tu_nhan(r[4], BUA),
+            buoi=ds_t if ds_t is not None else tu_nhan(r[5], BUOI), phut=r[6] or "", trich=str(r[7] or ""),
+            nguon=r[8] or "", link=r[9], ds=bool(r[10] or r[11]), ghi_chu_ds=r[12] or "")
+    return out
+
+
+# ---------------- lời dặn trong đơn ----------------
+P_DON_BUOI = [("sang", r"\bsang\b"), ("trua", r"\btrua\b"), ("chieu", r"\bchieu\b"), ("toi", r"\btoi\b"),
+              ("truoc_ngu", r"(?:truoc|di|khi) ngu")]
+
+
+def phan_tich_loi_dan(lieu):
+    u = ud(lieu)
+    t = trich_thoi_diem(lieu)
+    bua = set(t["bua"])
+    if re.search(r"\b(sa|s\.a)\b", u): bua.add("sau_an")
+    if re.search(r"\b(ta|t\.a)\b", u) and "truoc" not in u: bua.add("truoc_an")
+    buoi = set(k for k, p in P_DON_BUOI if re.search(p, u))
+    if "truoc_ngu" in buoi: buoi.discard("toi") if not re.search(r"\btoi\b", u.replace("truoc khi ngu", "")) else None
+    return dict(bua=bua, buoi=buoi)
+
+
+def doi_chieu(rec, lieu):
+    """→ list (mức, vấn đề, đề xuất, căn cứ).
+    - HDSD trước ăn/lúc đói mà đơn dặn sau/trong bữa ăn → Cần lưu ý (ảnh hưởng hấp thu/hiệu quả).
+    - HDSD trong/sau bữa ăn mà đơn dặn trước ăn/lúc đói → Tham khảo (thường do dung nạp tiêu hóa).
+    - HDSD trước ăn/lúc đói mà đơn không ghi thời điểm → Tham khảo (nhắc ghi lời dặn).
+    - Buổi trong ngày: chỉ xét khi HDSD chỉ nêu buổi sáng hoặc chỉ tối/trước ngủ → Tham khảo."""
+    if not rec: return []
+    H, B = rec["bua"], rec["buoi"]
+    D = phan_tich_loi_dan(lieu)
+    out = []
+    hd = " / ".join(BUA[k].lower() for k in BUA if k in H) + (f" ({rec['phut']})" if rec.get("phut") else "")
+    can = "HDSD: " + (rec["trich"].split("\n")[0][:200] if rec["trich"] else hd)
+    if H and "khong_phu_thuoc" not in H:
+        if H <= PRE and (D["bua"] & POST) and not (D["bua"] & PRE):
+            out.append(("Cần lưu ý", f"Lời dặn '{nhan(D['bua'], BUA)}' nhưng HDSD khuyến cáo uống {hd}",
+                        f"Sửa lời dặn: uống {hd}", can))
+        elif H <= POST and (D["bua"] & PRE) and not (D["bua"] & POST):
+            out.append(("Tham khảo", f"Lời dặn '{nhan(D['bua'], BUA)}' nhưng HDSD khuyến cáo uống {hd}",
+                        f"Cân nhắc sửa lời dặn: uống {hd}", can))
+        elif H <= PRE and not D["bua"]:
+            out.append(("Tham khảo", f"Lời dặn chưa ghi thời điểm so với bữa ăn; HDSD: uống {hd}",
+                        f"Bổ sung lời dặn: uống {hd}", can))
+    # buổi trong ngày: chỉ xét khi HDSD chỉ định rõ 1 nhóm (sáng) hoặc (tối/trước ngủ)
+    SANG, TOI = {"sang"}, {"toi", "truoc_ngu"}
+    Hb = B - {"co_dinh"}
+    if Hb and D["buoi"]:
+        if Hb <= SANG and D["buoi"] & (TOI | {"chieu"}) and not D["buoi"] & SANG:
+            out.append(("Tham khảo", f"Kê uống {nhan(D['buoi'], BUOI).lower()} nhưng HDSD khuyến cáo uống buổi sáng",
+                        "Cân nhắc chuyển sang uống buổi sáng", "HDSD: " + rec["trich"][:200]))
+        elif Hb <= TOI and D["buoi"] & SANG and not D["buoi"] & TOI:
+            out.append(("Tham khảo", f"Kê uống buổi sáng nhưng HDSD khuyến cáo {nhan(Hb, BUOI).lower()}",
+                        "Cân nhắc chuyển sang uống buổi tối/trước khi ngủ", "HDSD: " + rec["trich"][:200]))
+    return out
+
+
+def tim(bang, q):
+    k = norm(q)
+    if k in bang: return [bang[k]]
+    return [v for kk, v in bang.items() if k in kk or k in norm(v.get("hc"))]
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("lenh", choices=["tra-cuu", "tao-bang"])
+    ap.add_argument("ten", nargs="*")
+    ap.add_argument("--danh-muc", default=DM_MAC_DINH)
+    ap.add_argument("--bang", default=BANG_MAC_DINH)
+    a = ap.parse_args()
+    if a.lenh == "tao-bang":
+        d = tao_bang(a.danh_muc, a.bang)
+        import collections
+        print(f"Đã tạo {a.bang}: {len(d)} thuốc đường uống")
+        print("Bữa ăn:", dict(collections.Counter(x[4] for x in d).most_common()))
+        print("Thời điểm:", dict(collections.Counter(x[5] for x in d).most_common(8)))
+    else:
+        bang = doc_bang(a.bang)
+        for q in a.ten:
+            kq = tim(bang, q)
+            if not kq: print(f"• {q}: không có trong bảng (thuốc không dùng đường uống hoặc không có trong danh mục)"); continue
+            for v in kq:
+                print(f"• {v['ten']} ({v['hc']}) – Bữa ăn: {nhan(v['bua'], BUA) or 'Không nêu'}"
+                      + (f" ({v['phut']})" if v['phut'] else "") + f" | Thời điểm: {nhan(v['buoi'], BUOI) or 'Không nêu'}"
+                      + f" | Nguồn: {v['nguon']}" + (" | DS đã hiệu chỉnh" if v['ds'] else ""))
+                for line in v["trich"].split("\n")[:3]:
+                    if line: print("    «" + line + "»")

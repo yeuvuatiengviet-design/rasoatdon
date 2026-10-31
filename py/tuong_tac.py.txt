@@ -1,0 +1,150 @@
+# -*- coding: utf-8 -*-
+"""Phát hiện tương tác thuốc – thuốc trong cùng đơn.
+Dữ liệu (file Bang_tra_cuu_ra_soat.xlsx):
+  - Hoat_chat_nhom: tu_khoa (regex trên 'hoạt chất | tên thuốc' bỏ dấu), hoat_chat, nhom, duong_dung (he_thong/uong/moi)
+  - Tuong_tac: nhom_A, nhom_B, muc_do (Chống chỉ định/Nghiêm trọng/Cần lưu ý/Tham khảo), co_che, hau_qua, xu_tri, nguon, dieu_kien
+  - Cau_hinh: tt_loai_tru_ten (regex tên sản phẩm dùng tại chỗ không xét tương tác toàn thân)"""
+import re
+
+MUC_TT = {"Chống chỉ định": 0, "Chống chỉ định có điều kiện": 0.5, "Nghiêm trọng": 1, "Cần lưu ý": 2, "Tham khảo": 3}
+MUC_ISSUE = {"Chống chỉ định": "Nghiêm trọng", "Chống chỉ định có điều kiện": "Nghiêm trọng", "Nghiêm trọng": "Nghiêm trọng", "Cần lưu ý": "Cần lưu ý", "Tham khảo": "Tham khảo"}
+_HT = re.compile(r"uong|tiem|truyen|hit|khi dung|truc trang|ngam|nhai|duoi luoi")
+_TC = re.compile(r"nho mat|nho tai|nho mui|xit mui|dung ngoai|boi|ngoai da|dat am dao|suc mieng|sat khuan|rua ")
+
+
+def he_thong(duong):
+    d = (duong or "").lower()
+    if not d: return None                     # không rõ
+    if _HT.search(d): return True
+    if _TC.search(d): return False
+    return None
+
+
+def doc(rows_fn, cfg):
+    hc = []
+    for r in rows_fn("Hoat_chat_nhom"):
+        try: rx = re.compile(str(r["tu_khoa"]))
+        except re.error: continue
+        hc.append((rx, str(r.get("hoat_chat") or ""), set(x.strip() for x in str(r.get("nhom") or "").split(",") if x.strip()),
+                   str(r.get("duong_dung") or "he_thong").strip()))
+    tt = [r for r in rows_fn("Tuong_tac") if r.get("nhom_A") and r.get("nhom_B") and r.get("co_che") is not None]
+    loai = str(cfg.get("tt_loai_tru_ten") or "")
+    return dict(hc=hc, tt=tt, loai_tru=re.compile(loai) if loai else None)
+
+
+def gan_nhom(TT, text_hc_ten, ten_ud, duong_ud):
+    """Trả (tập hoạt chất chuẩn, tập nhóm) của 1 thuốc."""
+    if not TT or not TT["hc"]: return set(), set()
+    if TT["loai_tru"] and TT["loai_tru"].search(ten_ud): return set(), set()
+    ht = he_thong(duong_ud)
+    names, cls = set(), set()
+    for rx, name, nhom, dd in TT["hc"]:
+        if not rx.search(text_hc_ten): continue
+        if dd == "he_thong" and ht is False: continue
+        if dd == "uong" and duong_ud and "uong" not in duong_ud: continue
+        names.add(name); cls |= nhom
+    return names, cls | names
+
+
+def _dk_ok(dk, tuoi):
+    dk = str(dk or "").strip()
+    if not dk: return True
+    m = re.match(r"tuoi\s*>=\s*(\d+)", dk)
+    if m: return tuoi is not None and tuoi >= float(m.group(1))
+    return True
+
+
+ICD_RE = re.compile(r"[A-Z]\d{2}(?:\.\d{1,2})?")
+def _co_icd(icds, spec):
+    for t in [x.strip().upper() for x in str(spec).replace(";", ",").split(",") if x.strip()]:
+        if "-" in t:
+            a, b = t.split("-", 1)
+            if any(a <= c[:len(a)] <= b for c in icds): return True
+        elif any(c.startswith(t) for c in icds): return True
+    return False
+
+
+def ccd_neu_ok(expr, tuoi, icds):
+    """Điều kiện để cặp 'Chống chỉ định có điều kiện' (QĐ 5948) trở thành Chống chỉ định: 'tuoi<1', 'tuoi>=65', 'icd:N17-N19,K70-K77'; nối bằng ' hoac '."""
+    for part in re.split(r"\s+hoac\s+|\s+hoặc\s+", str(expr or "").strip()):
+        part = part.strip()
+        if not part: continue
+        m = re.match(r"tuoi\s*(<|>=|<=|>)\s*([\d.]+)", part)
+        if m and tuoi is not None:
+            v = float(m.group(2)); op = m.group(1)
+            if (op == "<" and tuoi < v) or (op == ">=" and tuoi >= v) or (op == "<=" and tuoi <= v) or (op == ">" and tuoi > v): return True
+        elif part.lower().startswith("icd:") and _co_icd(icds or [], part[4:]): return True
+    return False
+
+
+def kiem_tra(items, tuoi, TT, icds=None):
+    """items: list dict(ten, hc, tt_tags). Trả list phát hiện (mỗi cặp thuốc × quy tắc)."""
+    out, seen = [], set()
+    rules = (TT or {}).get("tt") or []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            A, B = items[i], items[j]
+            if A["ten_norm"] == B["ten_norm"]: continue
+            for k, r in enumerate(rules):
+                a, b = str(r["nhom_A"]).strip(), str(r["nhom_B"]).strip()
+                if (a in A["tt_tags"] and b in B["tt_tags"]): X, Y = A, B
+                elif (b in A["tt_tags"] and a in B["tt_tags"]): X, Y = B, A
+                else: continue
+                if not _dk_ok(r.get("dieu_kien"), tuoi): continue
+                key = (frozenset((i, j)), k)
+                if key in seen: continue
+                seen.add(key)
+                muc = str(r.get("muc_do") or "Cần lưu ý").strip()
+                hq = str(r.get("hau_qua") or "")
+                qd = str(r.get("qd5948") or "").strip()
+                if muc == "Chống chỉ định có điều kiện":
+                    dkt = str(r.get("dieu_kien_ccd") or "").strip()
+                    if ccd_neu_ok(r.get("ccd_neu"), tuoi, icds):
+                        muc = "Chống chỉ định"; hq = f"[CCĐ vì BN thỏa điều kiện: {dkt}] " + hq
+                    else:
+                        hq = f"[CCĐ có điều kiện – {dkt}; BN chưa xác định thỏa điều kiện → kiểm tra] " + hq
+                out.append(dict(A=X, B=Y, nhom_A=a, nhom_B=b, muc_tt=muc, qd5948=qd,
+                                co_che=r.get("co_che") or "", hau_qua=hq, xu_tri=r.get("xu_tri") or "",
+                                nguon=r.get("nguon") or "", trang_thai=r.get("trang_thai") or ""))
+    # "Triple whammy": ƯCMC/ARB + lợi tiểu + NSAID
+    ns = [x for x in items if "nsaid" in x["tt_tags"]]
+    for n in ns:
+        con = [x for x in items if x is not n]
+        ra = [x for x in con if "raas" in x["tt_tags"]]
+        lt = [x for x in con if "loi_tieu" in x["tt_tags"]]
+        if ra and lt:
+            out.append(dict(A=n, B=dict(ten=" + ".join(sorted({x["ten"] for x in ra + lt})), hc="ƯCMC/ARB + lợi tiểu"),
+                            nhom_A="nsaid", nhom_B="raas+loi_tieu", muc_tt="Nghiêm trọng",
+                            co_che="NSAID + ƯCMC/ARB + lợi tiểu ('triple whammy'): giảm tưới máu thận đồng thời ở tiểu động mạch đến và đi",
+                            hau_qua="Suy thận cấp (tăng 30-80% nguy cơ, nhất là 30 ngày đầu, người cao tuổi)",
+                            xu_tri="Tránh NSAID; nếu bắt buộc dùng ngắn ngày, đủ nước, kiểm tra creatinin", nguon="BMJ 2013; Stockley", trang_thai="",
+                            quy_tac=["nsaid × raas+loi_tieu"]))
+            break
+    # Người cao tuổi: ≥2 thuốc tăng nguy cơ té ngã (FRID – opioid, benzodiazepin, thuốc ngủ Z, gabapentinoid, chống trầm cảm, chống loạn thần)
+    fr = [x for x in items if "frid" in x["tt_tags"]]
+    if tuoi is not None and tuoi >= 65 and len({x["ten_norm"] for x in fr}) >= 2:
+        out.append(dict(A=fr[0], B=dict(ten=" + ".join(x["ten"] for x in fr[1:]), hc="thuốc tăng nguy cơ té ngã"),
+                        nhom_A="frid", nhom_B="frid (≥2, BN ≥65 tuổi)", muc_tt="Cần lưu ý", qd5948="",
+                        co_che="Cộng hợp an thần, hạ huyết áp tư thế, giảm phối hợp vận động",
+                        hau_qua=f"BN {tuoi:g} tuổi dùng {len(fr)} thuốc tăng nguy cơ té ngã (FRID) – nguy cơ té ngã, gãy xương",
+                        xu_tri="Rà soát lợi ích–nguy cơ từng thuốc, giảm liều/ngừng/đổi thuốc an toàn hơn; tránh opioid + benzodiazepin/gabapentinoid",
+                        nguon="Trung tâm DI & ADR Quốc gia – Té ngã do thuốc (Bản tin CGD 2/2026); Beers 2023; EuGMS 2023", trang_thai="",
+                        quy_tac=["frid ≥2 (≥65 tuổi)"]))
+    # gộp nhiều quy tắc của cùng 1 cặp thuốc thành 1 dòng (giữ mức nặng nhất)
+    gop = {}
+    for f in out:
+        k = (id(f["A"]), id(f["B"])) if id(f["A"]) < id(f["B"]) else (id(f["B"]), id(f["A"]))
+        if k not in gop: gop[k] = dict(f, quy_tac=[f"{f['nhom_A']} × {f['nhom_B']}"]); continue
+        g = gop[k]
+        if f.get("qd5948") and not g.get("qd5948"): g["qd5948"] = f["qd5948"]
+        if MUC_TT.get(f["muc_tt"], 9) < MUC_TT.get(g["muc_tt"], 9):
+            g["muc_tt"] = f["muc_tt"]
+            for key in ("co_che", "hau_qua", "xu_tri"): g[key] = f[key] + " | " + g[key]
+        else:
+            for key in ("co_che", "hau_qua", "xu_tri"):
+                if f[key] and f[key] not in g[key]: g[key] = g[key] + " | " + f[key]
+        if f["nguon"] and f["nguon"] not in g["nguon"]: g["nguon"] += "; " + f["nguon"]
+        g["quy_tac"].append(f"{f['nhom_A']} × {f['nhom_B']}")
+    out = list(gop.values())
+    out.sort(key=lambda x: MUC_TT.get(x["muc_tt"], 9))
+    return out

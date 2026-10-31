@@ -1,0 +1,643 @@
+# -*- coding: utf-8 -*-
+"""Rà soát đơn thuốc ngoại trú BHYT từ file 'Danh sách phát thuốc' xuất từ HIS.
+Dùng: python3 ra_soat.py --bao-cao BC.xlsx --danh-muc DM.xlsx --quy-tac Bang_tra_cuu_ra_soat.xlsx --out ket_qua.xlsx
+Không ghi họ tên bệnh nhân ra kết quả (chỉ mã LK + tuổi)."""
+import argparse, re, json, unicodedata, difflib, collections, datetime, os
+import openpyxl
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import thoi_diem as TD
+import tuong_tac as TTM
+import dinh_chi as DC
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+
+def ud(s):
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+
+def norm(s): return re.sub(r"\s+", " ", ud(s).strip())
+
+def thuoc_moi_chua_co_quy_tac(dm, Q):
+    """Thuốc có trong Danh mục thông tin thuốc nhưng chưa có dòng Thuoc_HDSD – tự phát hiện khi danh mục thêm thuốc mới.
+    Tương tác vẫn được kiểm tự động nếu hoạt chất khớp Hoat_chat_nhom; chỉ định/liều cần DS bổ sung."""
+    out = []
+    for k, info in dm.items():
+        ten = info.get("ten")
+        if not ten or tra_bang(Q["hdsd"], ten): continue
+        hc_tt, cls = TTM.gan_nhom(Q.get("tt2"), ud(info.get("hc") or "") + " | " + ud(ten), ud(ten), ud(info.get("duong") or ""))
+        out.append(dict(loai="Thuốc mới trong danh mục", thuoc=ten,
+                        noi_dung="Bổ sung dòng Thuoc_HDSD (ICD theo mục Chỉ định, tuổi, liều tối đa/tối thiểu theo HDSD)"
+                                 + (f"; tương tác đã tự nhận diện qua nhóm: {', '.join(sorted(hc_tt))}" if hc_tt else "; hoạt chất CHƯA có trong Hoat_chat_nhom – bổ sung nhóm + tra QĐ 5948"),
+                        ly_do=f"Hoạt chất: {hc_gon(info.get('hc'))}; Chỉ định HDSD: {str(info.get('cd') or '')[:200]}"))
+    return out
+
+def hc_gon(s):
+    """'Perindopril tert-butylamin 4 mg (tương đương ...) + Amlodipin (dưới dạng ...) 5 mg' -> 'Perindopril tert-butylamin + Amlodipin'"""
+    s = str(s or "")
+    for _ in range(3): s = re.sub(r"\([^()]*\)", "", s)
+    s = re.sub(r"\d+(?:[.,]\d+)?\s*(?:mg|mcg|µg|g|iu|ui|ml|%)\b", "", s, flags=re.I)
+    s = re.sub(r"\s*[;+]\s*", " + ", s); s = re.sub(r"\s{2,}", " ", s).strip(" +;,")
+    return s[:120]
+
+def split_list(s): return [x.strip() for x in str(s or "").replace(";", ",").split(",") if x.strip()]
+
+def icd_match(code, spec):
+    code = code.upper()
+    for t in split_list(spec):
+        t = t.upper()
+        if t == "*": return t
+        if "-" in t:
+            a, b = t.split("-", 1)
+            c = code[:len(a)]
+            if a <= c <= b[:len(a)] or (c[:len(b)] <= b and c >= a): return t
+        elif code.startswith(t): return t
+    return None
+
+def any_icd(codes, spec):
+    out = []
+    for c in codes:
+        m = icd_match(c, spec)
+        if m: out.append(c)
+    return out
+
+ICD_RE = re.compile(r"\b([A-Z]\d{2}(?:\.\d{1,2})?)")
+
+# ---------------- đọc báo cáo ----------------
+def doc_bao_cao(path):
+    ws = openpyxl.load_workbook(path, read_only=True, data_only=True).worksheets[0]
+    rows = list(ws.iter_rows(values_only=True))
+    hi = next(i for i, r in enumerate(rows) if any(ud(c).strip() == "ma duoc pham" for c in r if c))
+    H = {ud(c).strip(): j for j, c in enumerate(rows[hi]) if c}
+    col = lambda *names: next(H[n] for n in names if n in H)
+    cMa, cTen, cDv, cSl, cLieu = col("ma duoc pham"), col("ten duoc pham"), col("don vi"), col("so luong"), col("lieu dung")
+    cCd, cIcd, cBenh, cKem = col("chan doan"), col("ma icd"), col("ten benh chinh"), col("benh kem theo")
+    dons, cur = [], None
+    for r in rows[hi + 1:]:
+        g = lambda j: r[j] if j < len(r) else None
+        dv = str(g(cDv) or "")
+        if "LK:" in dv or "Kê ngày" in dv:
+            m = re.search(r"^(.*?)\s*Kê ngày\s*(\d{2}/\d{2}/\d{4}).*?LK:\s*(\S+)", dv)
+            bs, ngay, lk = (m.group(1).strip(), m.group(2), m.group(3)) if m else ("", "", dv)
+            dob = re.search(r"(\d{2}/\d{2}/\d{4})", str(g(cTen) or ""))
+            tuoi = None
+            try:
+                d0 = datetime.datetime.strptime(dob.group(1), "%d/%m/%Y"); d1 = datetime.datetime.strptime(ngay, "%d/%m/%Y")
+                tuoi = d1.year - d0.year - ((d1.month, d1.day) < (d0.month, d0.day))
+            except Exception: pass
+            ho_ten = re.split(r"\s*/\s*\d{1,2}/\d{1,2}/\d{4}", str(g(cTen) or ""))[0].strip(" /")
+            icd_chinh = ICD_RE.findall(str(g(cIcd) or ""))
+            icd_kem = [x for x in ICD_RE.findall(str(g(cKem) or "")) if x not in icd_chinh]
+            cur = dict(lk=lk, ho_ten=ho_ten, ma_bn=str(g(cMa) or ""), bac_si=bs, ngay=ngay, tuoi=tuoi, chan_doan=str(g(cCd) or ""), icd_chinh=icd_chinh,
+                       icd_kem=icd_kem, ten_benh_kem=str(g(cKem) or ""), thuoc=[])
+            dons.append(cur)
+        elif cur is not None and g(cTen) and g(cMa):
+            cur["thuoc"].append(dict(ma=str(g(cMa)), ten=str(g(cTen)).strip(), dv=dv, sl=g(cSl), lieu=str(g(cLieu) or "")))
+    return dons
+
+# ---------------- danh mục & quy tắc ----------------
+def doc_danh_muc(path):
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = next((w for w in wb.worksheets if "danh muc" in ud(w.title)), wb.worksheets[0])
+    rows = [r for r in ws.iter_rows(values_only=True)]
+    hdr = [ud(c).strip() if c else "" for c in rows[0]]
+    def idx(key): return next((i for i, h in enumerate(hdr) if key in h), None)
+    I = dict(ten=idx("ten thuoc"), hc=idx("hoat chat"), hl=idx("ham luong"), dang=idx("dang bao che"), duong=idx("duong dung"),
+             cd=idx("chi dinh"), lieu=idx("lieu dung"), ccd=idx("chong chi dinh"), tt=idx("than trong"), tuongtac=idx("tuong tac"),
+             link=idx("to huong dan"), gc=idx("ghi chu"))
+    dm = {}
+    for r in rows[1:]:
+        if len(r) <= I["ten"] or not r[I["ten"]]: continue
+        dm[norm(r[I["ten"]])] = {k: (r[v] if v is not None and v < len(r) else None) for k, v in I.items()}
+    return dm
+
+def nguon_hdsd(info):
+    """Đánh giá độ tin cậy cột Chỉ định của danh mục dựa trên link/ghi chú đối chiếu."""
+    if not info: return ""
+    link = str(info.get("link") or ""); gc = ud(info.get("gc") or "")
+    if not link: return "Danh mục chưa có tờ HDSD gốc"
+    if "drive.google" not in link: return "Nguồn web, không phải tờ HDSD gốc"
+    # Link Drive cũng có thể chứa PDF ghép từ ảnh web hoặc tài liệu thông tin thuốc (không phải tờ HDSD) → dựa vào ghi chú
+    if any(k in gc for k in ("tai lieu thong tin", "khong phai to hdsd")):
+        return "Tài liệu thông tin thuốc, không phải tờ HDSD – xem cột Ghi chú DM"
+    if any(k in gc for k in ("nguon web", "danh may lai", "khong phai ban scan")):
+        return "Nguồn web (PDF trên Drive), không phải tờ HDSD gốc"
+    if any(k in gc for k in ("chu y", "luu y", "khong phai", "khac ham luong", "thieu", "khong doc duoc", "can kiem tra")):
+        return "Ghi chú đối chiếu có lưu ý – xem cột Ghi chú DM"
+    return "Tờ HDSD gốc"
+
+def tim_danh_muc(dm, ten):
+    k = norm(ten)
+    if k in dm: return dm[k], "khớp tên"
+    k2 = k.replace(" ", "")
+    for kk, v in dm.items():
+        if kk.replace(" ", "") == k2: return v, "khớp tên"
+    m = difflib.get_close_matches(k, dm.keys(), 1, 0.85)
+    return (dm[m[0]], "gần đúng: " + m[0]) if m else (None, "không có trong danh mục")
+
+def _f(x):
+    try: return None if x in (None, "") else float(str(x).replace(",", "."))
+    except Exception: return None
+
+def doc_quy_tac(path):
+    wb = openpyxl.load_workbook(path, data_only=True)
+    def rows(name):
+        if name not in wb.sheetnames: return []
+        ws = wb[name]; R = list(ws.iter_rows(values_only=True)); h = [str(x).split(" (")[0] if x else "" for x in R[0]]
+        return [dict(zip(h, r)) for r in R[1:] if r and r[0]]
+    cfg = {r["tham_so"]: r["gia_tri"] for r in rows("Cau_hinh")}
+    hdsd = {norm(r["ten_thuoc"]): r for r in rows("Chi_dinh_HDSD")}
+    sp = {norm(r["ten_thuoc"]): dict(r, max_nl=_f(r.get("max_don_vi_ngay"))) for r in rows("Lieu_san_pham")}
+    # Bảng hợp nhất theo sản phẩm (v2): chỉ định HDSD + liều tối đa – ưu tiên hơn 2 sheet cũ
+    for r in rows("Thuoc_HDSD"):
+        k = norm(r["ten_thuoc"])
+        hdsd[k] = r
+        nl, tre, theo_icd = _f(r.get("max_dv_ngay_nguoi_lon")), _f(r.get("max_dv_ngay_tre_em")), str(r.get("max_dv_ngay_theo_icd") or "")
+        mn, mn_icd = _f(r.get("min_dv_ngay_nguoi_lon")), str(r.get("min_dv_ngay_theo_icd") or "")
+        if nl is not None or tre is not None or theo_icd or mn is not None or mn_icd:
+            sp[k] = dict(ten_thuoc=r["ten_thuoc"], max_nl=nl, max_tre=tre, tuoi_nl=_f(r.get("tuoi_nguoi_lon_tu")) or 12,
+                         theo_icd=[(a.rsplit(":", 1)[0], float(a.rsplit(":", 1)[1])) for a in theo_icd.split("|") if ":" in a],
+                         min_nl=mn, min_icd=[(a.rsplit(":", 1)[0], float(a.rsplit(":", 1)[1])) for a in mn_icd.split("|") if ":" in a],
+                         ghi_chu=r.get("lieu_tom_tat") or "")
+    return dict(thuoc=rows("Quy_tac_thuoc"), bhyt=rows("Dieu_kien_BHYT"), tt=rows("Tuong_tac"), tt2=TTM.doc(rows, cfg), dc=DC.doc(rows),
+                trung={r["nhom"]: r["muc_do"] for r in rows("Trung_nhom")}, sp=sp, cfg=cfg, hdsd=hdsd)
+
+def tra_bang(bang, *ten):
+    """Tra theo tên đơn thuốc, tên trong danh mục; khớp bỏ dấu cách; gần đúng ≥0.92."""
+    for t in ten:
+        if not t: continue
+        k = norm(t)
+        if k in bang: return bang[k]
+        k2 = k.replace(" ", "")
+        for kk, v in bang.items():
+            if kk.replace(" ", "") == k2: return v
+    for t in ten:
+        if not t: continue
+        m = difflib.get_close_matches(norm(t), bang.keys(), 1, 0.92)
+        if m: return bang[m[0]]
+    return None
+
+def gioi_han_lieu(sp, tuoi, icds):
+    """Trả (max đơn vị/ngày, mô tả) theo tuổi và ICD; None nếu không áp dụng."""
+    if not sp: return None, ""
+    for spec, v in sp.get("theo_icd") or []:
+        if any_icd(icds, spec): return v, f"theo ICD {spec}"
+    tnl = sp.get("tuoi_nl") or 12
+    if tuoi is not None and tuoi < tnl:
+        return (sp.get("max_tre"), f"trẻ <{tnl:g} tuổi") if sp.get("max_tre") is not None else (None, "")
+    return sp.get("max_nl"), "người lớn"
+
+TUOI_NL_MIN = 18
+ICD_GIAM_LIEU = "N17-N19,K70-K77"     # suy thận/suy gan: HDSD thường cho phép giảm liều
+def lieu_toi_thieu(sp, tuoi, icds):
+    """Trả (min đơn vị/ngày, mô tả) cho người lớn ≥18 tuổi; None nếu không áp dụng."""
+    if not sp or tuoi is None or tuoi < TUOI_NL_MIN: return None, ""
+    for spec, v in sp.get("min_icd") or []:
+        if any_icd(icds, spec): return v, f"theo ICD {spec}"
+    return sp.get("min_nl"), "người lớn"
+
+# ---------------- liều/ngày ----------------
+_DEM = r"vien|virn|goi|ong|v\b|g\b"
+DV_MAP = {"vien": _DEM, "goi": _DEM, "ong": _DEM}
+def don_vi_ngay(lieu, dv):
+    t = ud(lieu).replace(",", ".")
+    t = re.sub(r"(\d)\s*/\s*(\d)", r"\1/\2", t)          # "1/ 2 viên" -> "1/2"
+    if re.search(r"khi (sot|dau|can|ho|kho tho)|neu (sot|dau)", t): return None, "dùng khi cần"
+    key = ud(dv).strip().split()[0] if dv else ""
+    pat = DV_MAP.get(key)
+    if not pat: return None, "đơn vị không tính được"
+    num = r"(?<!\d)(?<!\d\.)(\d+(?:\.\d+)?(?:/\d+)?)(?!\d)(?!\.\d)(?!/\d)"
+    def f(x):
+        if "/" in x: a, b = x.split("/"); return float(a) / float(b)
+        return float(x)
+    m = re.search(num + r"\s*(?:" + pat + r")\s*[x×*]\s*(\d+)\s*lan", t)
+    if m: return f(m.group(1)) * int(m.group(2)), ""
+    m = re.search(r"(\d+)\s*lan.{0,20}?moi lan\s*" + num + r"\s*(?:" + pat + ")", t)
+    if m: return int(m.group(1)) * f(m.group(2)), ""
+    m = re.search(r"ngay\s*(?:uong|dung|ngam)?\s*" + num + r"\s*(?:" + pat + ")", t)
+    if m: return f(m.group(1)), ""
+    vals = [f(x) for x in re.findall(num + r"\s*(?:" + pat + ")", t)]
+    if len(vals) >= 3 and abs(vals[0] - sum(vals[1:])) < 1e-9: return vals[0], ""   # "uống 2 viên: sáng 1, tối 1"
+    slots = [f(x) for x in re.findall(r"(?:sang|trua|chieu|toi|\d{1,2}\s*h)\s*(?:uong|ngam)?\s*:?\s*" + num + r"(?!\s*(?:h\b|ml|mg|gio|phut|lan|p\b|ui|iu|dv|don vi|giot))", t)]
+    if re.search(r"\d\s*(?:ui|iu|dv|don vi)\b", t): slots = []
+    if len(slots) >= 2 and len(slots) > len(vals): return sum(slots), ""        # "sáng 2 tối 2 viên", "sáng 1 tói 1 viên"
+    if vals: return sum(vals), ""
+    # dạng viết tắt: "Sáng 1", "sáng 1 tối 1", "7h 1"
+    vals = [f(x) for x in re.findall(r"(?:sang|trua|chieu|toi|\d{1,2}\s*h)\s*(?:uong|ngam)?\s*" + num + r"(?!\s*(?:h\b|ml|mg|gio|phut|lan|p\b))", t)]
+    if vals: return sum(vals), ""
+    m = re.search(r"ngay\s*(?:uong|dung)?\s*" + num + r"(?!\s*(?:lan|l\b|ngay|tuan|h\b|gio|phut|ml|mg|p\b|giot))", t)   # "uống ngày 01 trước ăn"
+    if m: return f(m.group(1)), ""
+    return None, "không đọc được số lượng/lần"
+
+def mg_moi_don_vi(hl):
+    s = ud(hl)
+    if not s or "+" in s or ";" in s or "/ml" in s or "/g" in s: return None
+    m = re.match(r"\s*(\d+(?:[.,]\d+)?)\s*(mg|g|mcg|µg|ug)\b", s.replace("µ", "u"))
+    if not m: return None
+    v = float(m.group(1).replace(".", "").replace(",", ".")) if re.match(r"^\d{1,3}\.\d{3}$", m.group(1)) else float(m.group(1).replace(",", "."))
+    return v * {"mg": 1, "g": 1000, "mcg": 0.001, "ug": 0.001, "µg": 0.001}[m.group(2)]
+
+# ---------------- rà soát ----------------
+MUC = {"Nghiêm trọng": 1, "Cần lưu ý": 2, "Tham khảo": 3}
+
+def ra_soat(dons, dm, Q, bang_td=None):
+    issues, chi_tiet = [], []
+    bang_td = bang_td or {}
+    cfg = Q["cfg"]; man_tinh = cfg.get("icd_man_tinh", ""); tuoi_cao = int(cfg.get("tuoi_cao", 65))
+    nhom_than = set(split_list(cfg.get("nhom_can_chuc_nang_than", "")))
+    for d in dons:
+        icds = d["icd_chinh"] + d["icd_kem"]
+        base = dict(lk=d["lk"], tuoi=d["tuoi"], bac_si=d["bac_si"], ngay=d["ngay"],
+                    icd_chinh=", ".join(d["icd_chinh"]), icd_kem=", ".join(d["icd_kem"]))
+        def add(thuoc, hc, tieu_chi, van_de, muc, de_xuat, can_cu, xuat_toan="", phu_hop="", tt_qt=""):
+            issues.append(dict(base, thuoc=thuoc, hoat_chat=hc, tieu_chi=tieu_chi, van_de=van_de, muc=muc,
+                               phu_hop_icd=phu_hop, xuat_toan=xuat_toan, de_xuat=de_xuat, can_cu=can_cu, trang_thai_qt=tt_qt))
+        items = []
+        def _tags(t):
+            inf, _ = tim_danh_muc(dm, t["ten"])
+            tx = ud((inf or {}).get("hc") or "") + " | " + ud(t["ten"])
+            return set(x for r in Q["thuoc"] if re.search(str(r["tu_khoa"]), tx) for x in split_list(r.get("nhom")))
+        all_tags = [(t["ten"], _tags(t)) for t in d["thuoc"]]
+        txt_thuoc = [ud(x["ten"]) + " | " + ud((tim_danh_muc(dm, x["ten"])[0] or {}).get("hc") or "") for x in d["thuoc"]]
+        for idx_t, t in enumerate(d["thuoc"]):
+            info, kq_dm = tim_danh_muc(dm, t["ten"])
+            hc = (info or {}).get("hc") or ""
+            text = ud(hc) + " | " + ud(t["ten"])
+            rules = [r for r in Q["thuoc"] if re.search(str(r["tu_khoa"]), text)]
+            tags = set(x for r in rules for x in split_list(r.get("nhom")))
+            hc_tt, cls_tt = TTM.gan_nhom(Q.get("tt2"), text, ud(t["ten"]), ud((info or {}).get("duong") or ""))
+            items.append(dict(t=t, info=info, hc=hc, rules=rules, tags=tags | cls_tt, tt_tags=cls_tt, hc_tt=hc_tt,
+                              ten=t["ten"], ten_norm=norm(t["ten"])))
+            # --- đình chỉ / thu hồi / vi phạm chất lượng (Cục QLD, Sở Y tế) ---
+            for v_dc, kq_dc in DC.tim_cho_thuoc(Q.get("dc") or [], t["ten"], (info or {}).get("hl")):
+                nk, nv = DC._date(d.get("ngay")), v_dc.get("_ngay")
+                truoc = bool(nk and nv and nk < nv)
+                add(t["ten"], hc, "Thuốc đình chỉ/thu hồi", DC.mo_ta(v_dc) + ("" if kq_dc == "khớp tên" else f" [tên {kq_dc}: {v_dc.get('ten_thuoc')}]")
+                    + (" [đơn kê TRƯỚC ngày văn bản – kiểm tra lô đã cấp cho BN]" if truoc else " [đơn kê SAU ngày văn bản]"),
+                    "Tham khảo" if truoc else DC.muc_canh_bao(v_dc), DC.de_xuat(v_dc), f"Thuoc_dinh_chi: {v_dc.get('so_van_ban')}" + (f" ({v_dc.get('link')})" if v_dc.get("link") else ""),
+                    "", "", str(v_dc.get("trang_thai") or ""))
+            # --- ICD ---
+            bhyt = [b for b in Q["bhyt"] if re.search(str(b["tu_khoa"]), text)]
+            hd = tra_bang(Q["hdsd"], t["ten"], (info or {}).get("ten"))
+            tt_qt = "; ".join(sorted(set(str(r.get("trang_thai") or "") for r in rules))) if rules else ""
+            others = [x for j, x in enumerate(txt_thuoc) if j != idx_t]
+            muc_icd, ly_do = None, ""
+            if not info:
+                add(t["ten"], "", "Danh mục", "Thuốc không có trong danh mục thông tin thuốc của viện" + (" (đã có quy tắc tạm theo nguồn web)" if hd else ""), "Tham khảo",
+                    "DS kiểm tra thủ công, bổ sung vào danh mục", kq_dm)
+            if bhyt:
+                ok = [c for b in bhyt for c in any_icd(icds, b["icd_duoc_thanh_toan"])]
+                d.setdefault("icd_dung", set()).update(ok)
+                if ok: muc_icd, ly_do = "Phù hợp", "Đạt điều kiện BHYT (" + ", ".join(ok) + ")"
+                else:
+                    muc_icd, ly_do = "Không phù hợp", "; ".join(b["noi_dung_dieu_kien"] for b in bhyt)
+                    add(t["ten"], hc, "ICD – điều kiện thanh toán BHYT", "Không có ICD đạt điều kiện thanh toán: " + ly_do,
+                        "Nghiêm trọng", "Bổ sung ICD đúng điều kiện hoặc bỏ thuốc khỏi đơn BHYT",
+                        "Dieu_kien_BHYT: " + "; ".join(str(b.get("nguon") or "") for b in bhyt), "Có", muc_icd,
+                        "; ".join(str(b.get("trang_thai")) for b in bhyt))
+            if hd:
+                spec = str(hd.get("icd_HDSD") or "").strip()
+                gc = str(hd.get("ghi_chu") or hd.get("chi_dinh_tom_tat") or "")
+                ng = str(hd.get("nguon") or "") or nguon_hdsd(info)
+                cd_txt = str(hd.get("chi_dinh_HDSD") or (info or {}).get("cd") or "")[:250]
+                if spec == "*":
+                    m2, l2 = "Phù hợp", "Không đối chiếu ICD (thuốc theo triệu chứng/thủ thuật)"
+                else:
+                    ph = any_icd(icds, spec)
+                    dk = any_icd(icds, hd.get("icd_HDSD_co_dieu_kien"))
+                    pd = [c for r in rules for c in any_icd(icds, r.get("icd_phu_hop")) + any_icd(icds, r.get("icd_co_dieu_kien"))]
+                    kem = str(hd.get("icd_can_kem") or "").strip()
+                    dkt = str(hd.get("dk_thuoc") or "").strip()
+                    dt_ok = [o for o in others if dkt and re.search(dkt, o)]
+                    d.setdefault("icd_dung", set()).update(ph + dk)
+                    if ph and kem and not any_icd(icds, kem):
+                        m2, l2 = "Không phù hợp", f"Có {', '.join(sorted(set(ph)))} nhưng HDSD yêu cầu kèm ICD nhóm {kem}"
+                    elif ph: m2, l2 = "Phù hợp", "HDSD: " + ", ".join(sorted(set(ph)))
+                    elif dk: m2, l2 = "Phù hợp có điều kiện", "HDSD có điều kiện: " + ", ".join(sorted(set(dk)))
+                    elif dt_ok: m2, l2 = "Phù hợp có điều kiện", "Điều kiện HDSD: đơn có thuốc phối hợp phù hợp (" + dt_ok[0][:40] + ")"
+                    elif pd: m2, l2 = "Ngoài HDSD", "ICD " + ", ".join(sorted(set(pd))) + " không có trong chỉ định HDSD (chỉ phù hợp theo phác đồ/thực hành)"
+                    elif icds and all(c[0] in "RZ" for c in icds): m2, l2 = "Không rõ", "Đơn chỉ có mã triệu chứng (R/Z)"
+                    else: m2, l2 = "Không phù hợp", "Không ICD nào trong đơn thuộc chỉ định HDSD"
+                    if m2 in ("Không phù hợp", "Không rõ", "Ngoài HDSD"):
+                        add(t["ten"], hc, "ICD – chỉ định theo HDSD", l2 + ". Chỉ định HDSD (ICD): " + spec + (f". Ghi chú: {gc}" if gc else "") + (f" [{ng}]" if ng and ng != "Tờ HDSD gốc" else ""),
+                            "Cần lưu ý", "Bổ sung ICD đúng chỉ định HDSD hoặc xem lại chỉ định thuốc", "HDSD: " + cd_txt, "Có", m2, str(hd.get("trang_thai") or ""))
+                    elif m2 == "Phù hợp có điều kiện":
+                        add(t["ten"], hc, "ICD – chỉ định có điều kiện", l2 + (f". {gc}" if gc else ""), "Tham khảo",
+                            "DS xác nhận điều kiện trong bệnh án", "HDSD: " + cd_txt, "", m2, str(hd.get("trang_thai") or ""))
+                if muc_icd in (None, "Phù hợp"): muc_icd, ly_do = m2, l2
+                tccd, ttu = _f(hd.get("tuoi_ccd")), _f(hd.get("tuoi_hdsd_tu"))
+                if d["tuoi"] is not None and tccd and d["tuoi"] < tccd:
+                    add(t["ten"], hc, "Chống chỉ định theo tuổi", f"Bệnh nhân {d['tuoi']} tuổi – HDSD chống chỉ định/không dùng dưới {tccd:g} tuổi",
+                        "Nghiêm trọng", "Đổi thuốc phù hợp lứa tuổi", "HDSD (Thuoc_HDSD)", "", muc_icd, str(hd.get("trang_thai") or ""))
+                elif d["tuoi"] is not None and ttu and d["tuoi"] < ttu:
+                    add(t["ten"], hc, "Tuổi ngoài HDSD", f"Bệnh nhân {d['tuoi']} tuổi – HDSD chỉ có chỉ định/liều từ {ttu:g} tuổi",
+                        "Cần lưu ý", "Xem lại lựa chọn thuốc/dạng bào chế cho lứa tuổi", "HDSD (Thuoc_HDSD)", "", muc_icd, str(hd.get("trang_thai") or ""))
+                can = str(hd.get("can_thuoc") or "").strip()
+                if can and not any(re.search(can, o) for o in others):
+                    add(t["ten"], hc, "Phối hợp bắt buộc theo HDSD", f"HDSD yêu cầu dùng kèm thuốc nhóm /{can}/ nhưng đơn không có", "Cần lưu ý",
+                        "Bổ sung thuốc phối hợp hoặc xem lại chỉ định", "HDSD: " + cd_txt, "", muc_icd)
+            elif muc_icd is None and rules:
+                ph = [c for r in rules for c in any_icd(icds, r.get("icd_phu_hop"))]
+                dk = [c for r in rules for c in any_icd(icds, r.get("icd_co_dieu_kien"))]
+                d.setdefault("icd_dung", set()).update(ph + dk)
+                muc_icd = "Chưa đối chiếu HDSD"
+                ly_do = ("Theo phác đồ: " + ", ".join(sorted(set(ph + dk)))) if (ph or dk) else "Không khớp ICD nào"
+                add(t["ten"], hc, "ICD – chỉ định theo HDSD", "Thuốc chưa có trong sheet Thuoc_HDSD – " + ly_do, "Tham khảo",
+                    "Bổ sung Thuoc_HDSD", "HDSD: " + str((info or {}).get("cd") or "")[:250], "", muc_icd)
+            elif muc_icd is None:
+                muc_icd, ly_do = "Chưa có quy tắc", "DS đánh giá thủ công"
+                if info: add(t["ten"], hc, "Quy tắc", "Chưa có quy tắc ICD/liều cho thuốc này", "Tham khảo",
+                             "Bổ sung vào Thuoc_HDSD", "")
+            # --- ICD chống chỉ định ---
+            for r in rules:
+                for c in any_icd(icds, r.get("icd_ccd_tuyet_doi")):
+                    add(t["ten"], hc, "ICD chống chỉ định", f"Bệnh nhân có {c} – chống chỉ định với {hc or t['ten']}. {r.get('ghi_chu') or ''}".strip(),
+                        "Nghiêm trọng", "Đổi thuốc khác hoặc xác minh chẩn đoán", "Quy_tac_thuoc / Danh mục: " + str((info or {}).get("ccd") or "")[:200],
+                        "", muc_icd, str(r.get("trang_thai") or ""))
+                for c in any_icd(icds, r.get("icd_than_trong")):
+                    add(t["ten"], hc, "ICD thận trọng", f"Bệnh nhân có {c} – cần thận trọng khi dùng {hc or t['ten']}",
+                        "Cần lưu ý", "Theo dõi/cân nhắc lợi ích–nguy cơ", "Quy_tac_thuoc / Danh mục: " + str((info or {}).get("tt") or "")[:200],
+                        "", muc_icd, str(r.get("trang_thai") or ""))
+                tmin = r.get("tuoi_toi_thieu")
+                if hd and (hd.get("tuoi_ccd") not in (None, "") or hd.get("tuoi_hdsd_tu") not in (None, "")): tmin = None   # đã xét theo Thuoc_HDSD
+                if tmin not in (None, "") and d["tuoi"] is not None and d["tuoi"] < float(tmin):
+                    add(t["ten"], hc, "Chống chỉ định theo tuổi", f"Bệnh nhân {d['tuoi']} tuổi < {tmin} tuổi", "Nghiêm trọng",
+                        "Đổi thuốc phù hợp lứa tuổi", "Quy_tac_thuoc", "", muc_icd, str(r.get("trang_thai") or ""))
+            # --- liều & số ngày ---
+            dvn, ghi = don_vi_ngay(t["lieu"], t["dv"])
+            so_ngay = None
+            try:
+                if dvn: so_ngay = round(float(t["sl"]) / dvn, 1)
+            except Exception: pass
+            mg = mg_moi_don_vi((info or {}).get("hl")) if info else None
+            mg_ngay = round(mg * dvn, 3) if (mg and dvn) else None
+            vuot_mg = False
+            sp = tra_bang(Q["sp"], t["ten"], (info or {}).get("ten"))
+            if sp:
+                lim, mo_ta = gioi_han_lieu(sp, d["tuoi"], icds)
+                if lim is not None and dvn and dvn > lim + 1e-6:
+                    add(t["ten"], hc, "Liều dùng", f"{dvn:g} {t['dv']}/ngày vượt tối đa {lim:g} {t['dv']}/ngày ({mo_ta}) theo HDSD. {sp.get('ghi_chu') or ''} (lời dặn: '{t['lieu']}')".strip(),
+                        "Nghiêm trọng", "Giảm liều theo HDSD", "Thuoc_HDSD / Danh mục: " + str((info or {}).get("lieu") or "")[:200], "", muc_icd)
+                lo, mo_ta = lieu_toi_thieu(sp, d["tuoi"], icds)
+                if lo is not None and dvn and dvn < lo - 1e-6:
+                    giam = (d["tuoi"] or 0) >= 65 or bool(any_icd(icds, ICD_GIAM_LIEU))
+                    add(t["ten"], hc, "Liều dưới khuyến cáo", f"{dvn:g} {t['dv']}/ngày thấp hơn liều tối thiểu {lo:g} {t['dv']}/ngày ({mo_ta}) theo HDSD. {sp.get('ghi_chu') or ''} (lời dặn: '{t['lieu']}')".strip()
+                        + (" – BN ≥65 tuổi hoặc có mã suy thận/suy gan: có thể là giảm liều có chủ ý." if giam else ""),
+                        "Tham khảo" if giam else "Cần lưu ý", "Tăng liều đủ theo HDSD hoặc ghi rõ lý do giảm liều",
+                        "Thuoc_HDSD / Danh mục: " + str((info or {}).get("lieu") or "")[:200], "", muc_icd)
+            elif mg_ngay and len(rules) == 1 and rules[0].get("lieu_max_mg_ngay") not in (None, ""):
+                mx = float(rules[0]["lieu_max_mg_ngay"])
+                if mg_ngay > mx * 1.001:
+                    add(t["ten"], hc, "Liều dùng", f"Liều {mg_ngay:g} mg/ngày vượt tối đa {mx:g} mg/ngày ({t['lieu']})", "Nghiêm trọng",
+                        "Giảm liều theo HDSD", "Quy_tac_thuoc / Danh mục: " + str(info.get("lieu") or "")[:200], "", muc_icd)
+            items[-1].update(dvn=dvn, so_ngay=so_ngay)
+            la_man_tinh = bool(any_icd(icds, man_tinh))
+            lim = int(cfg.get("so_ngay_toi_da_man_tinh", 90) if la_man_tinh else cfg.get("so_ngay_toi_da_thuong", 30))
+            if so_ngay and so_ngay > lim + 0.5:
+                add(t["ten"], hc, "Số lượng/số ngày kê", f"Kê {t['sl']} {t['dv']} ≈ {so_ngay:g} ngày > {lim} ngày" + ("" if la_man_tinh else " (đơn không có ICD bệnh mạn tính)"),
+                    "Cần lưu ý", "Điều chỉnh số lượng theo TT 26/2025/TT-BYT", "Cau_hinh", "Có", muc_icd)
+            if "khang_sinh" in items[-1]["tags"] and so_ngay and so_ngay > float(cfg.get("so_ngay_khang_sinh_toi_da", 14)):
+                add(t["ten"], hc, "Kháng sinh – thời gian dùng", f"Kháng sinh ≈ {so_ngay:g} ngày", "Cần lưu ý", "Xem lại thời gian điều trị", "Cau_hinh", "", muc_icd)
+            if "nguy_co_cao" in items[-1]["tags"]:
+                if "insulin" in items[-1]["tags"] and not re.search(r"\d+\s*\.*\s*(dv|ui|iu|don vi)", ud(t["lieu"])):
+                    add(t["ten"], hc, "Thuốc nguy cơ cao", f"Insulin không ghi rõ liều (đơn vị): '{t['lieu']}'", "Cần lưu ý", "Ghi rõ số đơn vị/lần", "", "", muc_icd)
+            if dvn is None and ghi in ("không đọc được số lượng/lần",) and t["dv"].lower().startswith(("viên", "gói", "ống")):
+                add(t["ten"], hc, "Cách dùng", f"Không xác định được liều/lần từ '{t['lieu']}'", "Tham khảo", "Ghi rõ số lượng mỗi lần dùng", "", "", muc_icd)
+            # --- thời điểm dùng (trước/sau ăn, sáng/tối) theo HDSD ---
+            rec_td = bang_td.get(norm(t["ten"])) or (bang_td.get(norm((info or {}).get("ten") or "")) if info else None)
+            td_hdsd = ""
+            if rec_td:
+                td_hdsd = "; ".join(x for x in (TD.nhan(rec_td["bua"], TD.BUA) + (f" ({rec_td['phut']})" if rec_td["phut"] else ""),
+                                                 TD.nhan(rec_td["buoi"], TD.BUOI)) if x)
+                ng_td = "" if (rec_td["ds"] or rec_td["nguon"] == "Tờ HDSD (Drive)") else f" [{rec_td['nguon']}]"
+                for muc_td, vd_td, dx_td, cc_td in TD.doi_chieu(rec_td, t["lieu"]):
+                    add(t["ten"], hc, "Thời điểm dùng", vd_td + f" (lời dặn: '{t['lieu']}')" + ng_td, muc_td, dx_td,
+                        ("DS hiệu chỉnh – " if rec_td["ds"] else "") + cc_td, "", muc_icd)
+            chi_tiet.append(dict(base, thuoc=t["ten"], thoi_diem_hdsd=td_hdsd, hoat_chat=hc, ham_luong=(info or {}).get("hl"), so_luong=t["sl"], don_vi=t["dv"],
+                                 cach_dung=t["lieu"], dv_ngay=dvn, so_ngay=so_ngay, mg_ngay=mg_ngay, phu_hop_icd=muc_icd,
+                                 can_cu_icd=ly_do, nhom=", ".join(sorted(items[-1]["tags"])), danh_muc=kq_dm,
+                                 trang_thai_qt=tt_qt, nguon_hdsd=nguon_hdsd(info), link_hdsd=(info or {}).get("link"),
+                                 ghi_chu_dm=str((info or {}).get("gc") or "")[:300]))
+        # --- tương tác & trùng nhóm trong đơn ---
+        seen = set()
+        new_tt = bool((Q.get("tt2") or {}).get("hc"))
+        if new_tt:
+            for f in TTM.kiem_tra(items, d["tuoi"], Q["tt2"], icds):
+                A, B = f["A"], f["B"]
+                muc, hq = TTM.MUC_ISSUE.get(f["muc_tt"], "Cần lưu ý"), str(f["hau_qua"])
+                if "kali" in (f["nhom_A"], f["nhom_B"]) and any_icd(icds, "E87.6"):
+                    muc = {"Nghiêm trọng": "Cần lưu ý", "Cần lưu ý": "Tham khảo"}.get(muc, muc)
+                    hq += " (BN có E87.6 hạ kali – phối hợp có thể chủ ý; cần theo dõi K+)"
+                nhan = ("[CHỐNG CHỈ ĐỊNH PHỐI HỢP] " if f["muc_tt"] == "Chống chỉ định" else "") + (f"[QĐ 5948: {f['qd5948']}] " if f.get("qd5948") else "")
+                hca = hc_gon(A.get("hc")) or ", ".join(sorted(A.get("hc_tt") or []))
+                hcb = hc_gon(B.get("hc")) or ", ".join(sorted(B.get("hc_tt") or []))
+                qtac = "; ".join(f.get("quy_tac") or [f"{f['nhom_A']} × {f['nhom_B']}"])
+                add(A["ten"] + " + " + B["ten"], f"{hca} + {hcb}", "Tương tác thuốc",
+                    f"{nhan}{hq}. Cơ chế: {f['co_che']}", muc, f["xu_tri"], f"Tuong_tac: {qtac} ({f['nguon']})", tt_qt=str(f.get("trang_thai") or ""))
+                issues[-1].update(tt_a=A["ten"], tt_hc_a=hca, tt_b=B["ten"], tt_hc_b=hcb, muc_tt=f["muc_tt"], co_che=f["co_che"],
+                                  hau_qua=f["hau_qua"], xu_tri_tt=f["xu_tri"], nguon_tt=f["nguon"], quy_tac_tt=qtac, qd5948=f.get("qd5948") or "")
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                A, B = items[i], items[j]
+                if norm(A["t"]["ten"]) == norm(B["t"]["ten"]):
+                    add(A["t"]["ten"], A["hc"], "Trùng thuốc", "Thuốc được kê 2 lần trong cùng đơn", "Nghiêm trọng", "Bỏ 1 dòng", "")
+                    continue
+                if not new_tt:
+                    for r in Q["tt"]:
+                        a, b = r["nhom_A"], r["nhom_B"]
+                        if (a in A["tags"] and b in B["tags"]) or (b in A["tags"] and a in B["tags"]):
+                            key = (i, j, a, b)
+                            if key in seen: continue
+                            seen.add(key)
+                            add(A["t"]["ten"] + " + " + B["t"]["ten"], f"{A['hc']} + {B['hc']}", "Tương tác thuốc",
+                                r["hau_qua"], r["muc_do"], r["xu_tri"], f"Tuong_tac: {a} × {b}")
+                for g in sorted(A["tags"] & B["tags"]):
+                    if g in Q["trung"]:
+                        add(A["t"]["ten"] + " + " + B["t"]["ten"], f"{A['hc']} + {B['hc']}", "Trùng nhóm/hoạt chất",
+                            f"Hai thuốc cùng nhóm '{g}'", Q["trung"][g], "Giữ 1 thuốc hoặc giải thích lý do phối hợp", "Trung_nhom")
+        qt = [i for i in items if "keo_dai_qt" in i["tags"]]
+        if len(qt) >= 2 and not new_tt:
+            add(" + ".join(i["t"]["ten"] for i in qt), "", "Tương tác thuốc", "≥2 thuốc kéo dài khoảng QT", "Cần lưu ý", "Cân nhắc ECG/đổi thuốc", "Nhóm keo_dai_qt")
+        # --- thiếu dữ liệu ---
+        if d["tuoi"] is not None and d["tuoi"] >= tuoi_cao:
+            can = [i["t"]["ten"] for i in items if i["tags"] & nhom_than]
+            if can and not any_icd(icds, "N18,N17,N19"):
+                add(", ".join(can), "", "Thiếu dữ liệu – chức năng thận", f"BN {d['tuoi']} tuổi dùng thuốc cần hiệu chỉnh theo thận; báo cáo không có creatinin/eGFR",
+                    "Tham khảo", "Kiểm tra creatinin/eGFR gần nhất", "Cau_hinh")
+        if d["tuoi"] is not None and d["tuoi"] < 12 and items:
+            add(", ".join(i["t"]["ten"] for i in items), "", "Thiếu dữ liệu – cân nặng", f"BN {d['tuoi']} tuổi, báo cáo không có cân nặng để kiểm tra liều mg/kg",
+                "Tham khảo", "Đối chiếu cân nặng trong bệnh án", "")
+    issues.sort(key=lambda x: (MUC.get(x["muc"], 9), x["lk"]))
+    return issues, chi_tiet
+
+# ---------------- xuất Excel ----------------
+FILL = {"Nghiêm trọng": "F8CBAD", "Cần lưu ý": "FFE699", "Tham khảo": "DDEBF7",
+        "Không phù hợp": "F8CBAD", "Không rõ": "FFE699", "Phù hợp có điều kiện": "FFF2CC", "Phù hợp": "E2EFDA", "Chưa có quy tắc": "EDEDED", "Ngoài HDSD": "F4B183", "Chưa đối chiếu HDSD": "EDEDED"}
+
+def ghi_sheet(wb, title, cols, data, color_key=None):
+    ws = wb.create_sheet(title)
+    ws.append([c[1] for c in cols])
+    for d in data:
+        ws.append([d.get(c[0]) for c in cols])
+    for i, c in enumerate(cols, 1): ws.column_dimensions[get_column_letter(i)].width = c[2]
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF"); c.fill = PatternFill("solid", fgColor="1F4E78")
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+    ki = [c[0] for c in cols].index(color_key) + 1 if color_key else None
+    for row in ws.iter_rows(min_row=2):
+        for c in row: c.alignment = Alignment(wrap_text=True, vertical="top")
+        if ki and row[ki - 1].value in FILL: row[ki - 1].fill = PatternFill("solid", fgColor=FILL[row[ki - 1].value])
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = ws.dimensions
+    return ws
+
+def xuat(issues, chi_tiet, dons, out, de_xuat=None, co_ten=False, dinh_chi=None):
+    """co_ten=True: thêm Họ tên + Mã BN (chỉ dùng cho file lưu nội bộ trên máy bệnh viện)."""
+    wb = openpyxl.Workbook(); wb.remove(wb.active)
+    if co_ten:
+        tt = {d["lk"]: (d.get("ho_ten") or "", d.get("ma_bn") or "") for d in dons}
+        issues = [dict(i, ho_ten=tt.get(i["lk"], ("", ""))[0], ma_bn=tt.get(i["lk"], ("", ""))[1]) for i in issues]
+        chi_tiet = [dict(c, ho_ten=tt.get(c["lk"], ("", ""))[0], ma_bn=tt.get(c["lk"], ("", ""))[1]) for c in chi_tiet]
+    TEN = [("ho_ten", "Họ tên BN", 22), ("ma_bn", "Mã BN", 11)] if co_ten else []
+    # Tổng hợp
+    ws = wb.create_sheet("Tổng hợp")
+    nd = len(dons); nt = sum(len(d["thuoc"]) for d in dons)
+    don_vd = len(set(i["lk"] for i in issues if i["muc"] != "Tham khảo"))
+    ws.append(["KẾT QUẢ RÀ SOÁT ĐƠN THUỐC"]); ws["A1"].font = Font(bold=True, size=14)
+    ngays = sorted(set(d["ngay"] for d in dons))
+    ws.append([f"Ngày kê: {ngays[0]} – {ngays[-1]}" if ngays else ""])
+    ws.append([f"Số đơn: {nd} | Số dòng thuốc: {nt} | Đơn có vấn đề (Nghiêm trọng/Cần lưu ý): {don_vd}"]); ws.append([])
+    ws.append(["Mức độ", "Số vấn đề"])
+    for m in MUC: ws.append([m, sum(1 for i in issues if i["muc"] == m)])
+    ws.append([]); ws.append(["Tiêu chí", "Nghiêm trọng", "Cần lưu ý", "Tham khảo"])
+    tc = collections.OrderedDict()
+    for i in issues: tc.setdefault(i["tieu_chi"], collections.Counter())[i["muc"]] += 1
+    for k, c in tc.items(): ws.append([k, c["Nghiêm trọng"], c["Cần lưu ý"], c["Tham khảo"]])
+    ws.append([]); ws.append(["Mức phù hợp ICD (theo dòng thuốc)", "Số dòng"])
+    for k, v in collections.Counter(c["phu_hop_icd"] for c in chi_tiet).most_common(): ws.append([k, v])
+    ws.append([]); ws.append(["Bác sĩ", "Số đơn", "Vấn đề Nghiêm trọng", "Vấn đề Cần lưu ý", "Dòng thuốc nguy cơ xuất toán"])
+    bs = collections.defaultdict(lambda: [set(), 0, 0, 0])
+    for d in dons: bs[d["bac_si"]][0].add(d["lk"])
+    for i in issues:
+        b = bs[i["bac_si"]]
+        if i["muc"] == "Nghiêm trọng": b[1] += 1
+        if i["muc"] == "Cần lưu ý": b[2] += 1
+        if i["xuat_toan"] == "Có": b[3] += 1
+    for k, v in sorted(bs.items(), key=lambda x: -x[1][1]): ws.append([k, len(v[0]), v[1], v[2], v[3]])
+    ws.append([]); ws.append(["Thuốc có nhiều dòng không đúng chỉ định HDSD", "Số dòng"])
+    for k, v in collections.Counter(c["thuoc"] for c in chi_tiet if c["phu_hop_icd"] in ("Không phù hợp", "Không rõ", "Ngoài HDSD")).most_common(15): ws.append([k, v])
+    ws.append([]); ws.append(["ICD trong đơn không giải thích cho thuốc nào (gợi ý mã hóa sai/thừa)", "Số đơn"])
+    orphan = collections.Counter()
+    for d in dons:
+        for c in set(d["icd_chinh"] + d["icd_kem"]) - set(d.get("icd_dung", set())): orphan[c] += 1
+    for k, v in orphan.most_common(15): ws.append([k, v])
+    ws.column_dimensions["A"].width = 48
+    for col in "BCDE": ws.column_dimensions[col].width = 18
+    for row in ws.iter_rows():
+        if row[0].value in ("Mức độ", "Tiêu chí", "Bác sĩ", "Mức phù hợp ICD (theo dòng thuốc)", "Thuốc có nhiều dòng không đúng chỉ định HDSD", "ICD trong đơn không giải thích cho thuốc nào (gợi ý mã hóa sai/thừa)"):
+            for c in row:
+                if c.value is not None: c.font = Font(bold=True, color="FFFFFF"); c.fill = PatternFill("solid", fgColor="1F4E78")
+    ghi_sheet(wb, "Danh sách vấn đề", [
+        ("muc", "Mức độ", 13), ("lk", "Mã LK", 16)] + TEN + [("tuoi", "Tuổi", 6), ("bac_si", "Bác sĩ", 18), ("icd_chinh", "ICD chính", 9),
+        ("icd_kem", "ICD kèm theo", 18), ("thuoc", "Thuốc", 26), ("hoat_chat", "Hoạt chất", 24), ("tieu_chi", "Tiêu chí", 20),
+        ("van_de", "Vấn đề", 50), ("phu_hop_icd", "Mức phù hợp ICD", 14), ("xuat_toan", "Nguy cơ xuất toán", 10),
+        ("de_xuat", "Đề xuất", 32), ("can_cu", "Căn cứ", 30), ("trang_thai_qt", "Trạng thái quy tắc", 16), ("nhan_xet", "Nhận xét DS lâm sàng (tự động)", 50), ("dsxn", "DS xác nhận (Đồng ý/Bỏ qua)", 14)],
+        issues, "muc")
+    # ---- Tương tác thuốc: danh sách cặp + thống kê ----
+    THU = {"Chống chỉ định": 0, "Chống chỉ định có điều kiện": 0.5, "Nghiêm trọng": 1, "Cần lưu ý": 2, "Tham khảo": 3}
+    ngay_lk = {d["lk"]: d.get("ngay") for d in dons}
+    tts = sorted([dict(i, ngay=ngay_lk.get(i["lk"])) for i in issues if i.get("tieu_chi") == "Tương tác thuốc" and i.get("muc_tt")],
+                 key=lambda x: (THU.get(x["muc_tt"], 9), x["lk"]))
+    if tts:
+        ws_tt = ghi_sheet(wb, "Tương tác thuốc", [
+            ("muc_tt", "Mức độ tương tác", 14), ("qd5948", "Danh mục CCĐ QĐ 5948/QĐ-BYT", 14), ("muc", "Mức độ (sau nhận xét DS)", 12), ("lk", "Mã LK", 16)] + TEN + [("tuoi", "Tuổi", 6),
+            ("bac_si", "Bác sĩ", 18), ("ngay", "Ngày kê", 11), ("icd_chinh", "ICD chính", 9), ("icd_kem", "ICD kèm", 16),
+            ("tt_a", "Thuốc A", 24), ("tt_hc_a", "Hoạt chất A", 22), ("tt_b", "Thuốc B", 24), ("tt_hc_b", "Hoạt chất B", 22),
+            ("hau_qua", "Hậu quả", 42), ("co_che", "Cơ chế", 40), ("xu_tri_tt", "Xử trí đề xuất", 42), ("nguon_tt", "Nguồn", 20),
+            ("quy_tac_tt", "Quy tắc", 22), ("nhan_xet", "Nhận xét DS (tự động)", 30), ("dsxn", "DS xác nhận / Ý kiến BS", 18)], tts)
+        MT = {"Chống chỉ định": "C00000", "Chống chỉ định có điều kiện": "FF7C80", "Nghiêm trọng": "F8CBAD", "Cần lưu ý": "FFE699", "Tham khảo": "DDEBF7"}
+        for row in ws_tt.iter_rows(min_row=2):
+            c = row[0]; c.fill = PatternFill("solid", fgColor=MT.get(c.value, "FFFFFF"))
+            if c.value == "Chống chỉ định": c.font = Font(bold=True, color="FFFFFF")
+        ws2 = wb.create_sheet("Tương tác – thống kê")
+        ws2.append(["THỐNG KÊ TƯƠNG TÁC THUỐC TRONG ĐƠN"]); ws2["A1"].font = Font(bold=True, size=13)
+        ws2.append([f"Số cặp tương tác: {len(tts)} | Số đơn có tương tác: {len(set(t['lk'] for t in tts))}/{len(dons)} | "
+                    + " | ".join(f"{k}: {sum(1 for t in tts if t['muc_tt'] == k)}" for k in THU)]); ws2.append([])
+        hdr = ws2.max_row + 1
+        ws2.append(["Mức độ", "Cặp hoạt chất", "Số lần", "Số bác sĩ kê", "Hậu quả", "Xử trí đề xuất"])
+        grp = collections.OrderedDict()
+        for t in tts:
+            k = (t["muc_tt"], " + ".join(sorted([str(t["tt_hc_a"])[:60], str(t["tt_hc_b"])[:60]])))
+            g = grp.setdefault(k, dict(n=0, bs=set(), hq=t["hau_qua"], xt=t["xu_tri_tt"])); g["n"] += 1; g["bs"].add(t["bac_si"])
+        for (m, cap), g in sorted(grp.items(), key=lambda x: (THU.get(x[0][0], 9), -x[1]["n"])):
+            ws2.append([m, cap, g["n"], len(g["bs"]), g["hq"], g["xt"]])
+        ws2.append([]); hdr2 = ws2.max_row + 1
+        ws2.append(["Bác sĩ", "Chống chỉ định", "CCĐ có điều kiện", "Nghiêm trọng", "Cần lưu ý", "Tham khảo", "Tổng"])
+        bsc = collections.defaultdict(collections.Counter)
+        for t in tts: bsc[t["bac_si"]][t["muc_tt"]] += 1
+        for b_, c_ in sorted(bsc.items(), key=lambda x: (-x[1]["Chống chỉ định"], -x[1]["Nghiêm trọng"], -sum(x[1].values()))):
+            ws2.append([b_, c_["Chống chỉ định"], c_["Chống chỉ định có điều kiện"], c_["Nghiêm trọng"], c_["Cần lưu ý"], c_["Tham khảo"], sum(c_.values())])
+        for r_ in (hdr, hdr2):
+            for c in ws2[r_]: c.font = Font(bold=True, color="FFFFFF"); c.fill = PatternFill("solid", fgColor="1F4E78")
+        for col, w in zip("ABCDEFG", (16, 60, 9, 11, 60, 60, 10)): ws2.column_dimensions[col].width = w
+        for row in ws2.iter_rows(min_row=hdr + 1):
+            for c in row: c.alignment = Alignment(wrap_text=True, vertical="top")
+            if row[0].value in MT and row[0].row < hdr2: row[0].fill = PatternFill("solid", fgColor=MT[row[0].value])
+    ghi_sheet(wb, "Chi tiết thuốc", [
+        ("lk", "Mã LK", 16)] + TEN + [("tuoi", "Tuổi", 6), ("bac_si", "Bác sĩ", 18), ("icd_chinh", "ICD chính", 9), ("icd_kem", "ICD kèm", 18),
+        ("thuoc", "Thuốc", 26), ("hoat_chat", "Hoạt chất", 24), ("ham_luong", "Hàm lượng", 12), ("so_luong", "SL", 6), ("don_vi", "ĐV", 7),
+        ("cach_dung", "Cách dùng", 30), ("thoi_diem_hdsd", "Thời điểm dùng theo HDSD", 24), ("dv_ngay", "ĐV/ngày", 8), ("so_ngay", "Số ngày", 8), ("mg_ngay", "mg/ngày", 9),
+        ("phu_hop_icd", "Mức phù hợp ICD", 15), ("can_cu_icd", "ICD căn cứ", 24), ("nhom", "Nhóm", 22), ("danh_muc", "Khớp danh mục", 14),
+        ("nguon_hdsd", "Nguồn HDSD trong danh mục", 22), ("link_hdsd", "Link tờ HDSD", 30), ("ghi_chu_dm", "Ghi chú đối chiếu (DM)", 40)],
+        chi_tiet, "phu_hop_icd")
+    if dinh_chi:
+        dem = collections.Counter(i["thuoc"] for i in issues if i.get("tieu_chi") == "Thuốc đình chỉ/thu hồi")
+        don = collections.defaultdict(set)
+        for i in issues:
+            if i.get("tieu_chi") == "Thuốc đình chỉ/thu hồi": don[i["thuoc"]].add(i["lk"])
+        rows_dc = [dict(r, so_don=len(don.get(r["thuoc_dm"], ())) or "") for r in dinh_chi]
+        co = {norm(r["thuoc_dm"]) for r in dinh_chi}
+        for th, lks in don.items():          # thuốc có trong đơn nhưng không có trong danh mục BV
+            if norm(th) in co: continue
+            i0 = next(i for i in issues if i["thuoc"] == th and i.get("tieu_chi") == "Thuốc đình chỉ/thu hồi")
+            rows_dc.append(dict(muc=max((i["muc"] for i in issues if i["thuoc"] == th and i.get("tieu_chi") == "Thuốc đình chỉ/thu hồi"), key=lambda m: -MUC.get(m, 9)),
+                                hieu_luc="Còn hiệu lực", thuoc_dm=th + " (KHÔNG có trong Danh mục thông tin thuốc)", khop="theo đơn",
+                                ten_vb=i0["van_de"][:200], so_don=len(lks), de_xuat=i0["de_xuat"], link=i0["can_cu"]))
+        ws_dc = ghi_sheet(wb, "Đình chỉ – thu hồi", [
+            ("muc", "Mức cảnh báo", 12), ("hieu_luc", "Hiệu lực", 13), ("thuoc_dm", "Thuốc trong danh mục BV", 26), ("hl_dm", "Hàm lượng DM", 12),
+            ("khop", "Khớp", 9), ("ten_vb", "Thuốc trong văn bản", 26), ("loai", "Loại", 16), ("muc_vi_pham", "Mức vi phạm", 9), ("pham_vi", "Phạm vi", 9),
+            ("so_lo", "Số lô", 14), ("han_dung", "Hạn dùng lô", 11), ("so_dang_ky", "SĐK", 14), ("co_so_san_xuat", "Cơ sở SX", 24),
+            ("so_van_ban", "Văn bản", 16), ("ngay_van_ban", "Ngày", 11), ("ly_do", "Lý do", 30), ("so_don", "Số đơn đã kê trong kỳ", 10),
+            ("de_xuat", "Việc cần làm", 46), ("link", "Link", 30), ("dsxn", "Khoa Dược xác nhận (lô tồn/đã cấp)", 22)], rows_dc, "muc")
+        ws_dc.sheet_properties.tabColor = "C00000"
+    if de_xuat:
+        ghi_sheet(wb, "Đề xuất bổ sung quy tắc", [("loai", "Loại", 16), ("thuoc", "Thuốc", 30), ("noi_dung", "Nội dung đề xuất", 60), ("ly_do", "Lý do", 40)], de_xuat)
+    wb.save(out)
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    REF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "references")
+    ap.add_argument("--bao-cao", required=True)
+    ap.add_argument("--danh-muc", default=os.path.join(REF, "Danh_muc_thong_tin_thuoc.xlsx"), help="mặc định: references/")
+    ap.add_argument("--quy-tac", default=os.path.join(REF, "Bang_tra_cuu_ra_soat.xlsx"), help="mặc định: references/ (sheet Thuoc_HDSD)")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--thoi-diem", default=TD.BANG_MAC_DINH, help="bảng thời điểm dùng thuốc (mặc định: references/Thoi_diem_dung_thuoc.xlsx)")
+    ap.add_argument("--ghi-chu", default=os.path.join(REF, "Ghi_chu_DS.xlsx"), help="quy tắc nhận xét DS riêng (tùy chọn)")
+    ap.add_argument("--ho-ten", action="store_true", help="thêm Họ tên + Mã BN vào file Excel (chỉ khi chạy trên máy nội bộ bệnh viện)")
+    ap.add_argument("--json", help="xuất đơn đã chuẩn hóa (không tên BN) để Claude rà soát thêm")
+    a = ap.parse_args()
+    dons = doc_bao_cao(a.bao_cao); dm = doc_danh_muc(a.danh_muc); Q = doc_quy_tac(a.quy_tac)
+    issues, ct = ra_soat(dons, dm, Q, TD.doc_bang(a.thoi_diem))
+    de_xuat = None
+    try:
+        import ghi_chu_ds as G
+        G.ap_dung(issues, ct, a.ghi_chu if os.path.exists(a.ghi_chu) else None); de_xuat = G.de_xuat_bo_sung(issues, ct) + thuoc_moi_chua_co_quy_tac(dm, Q)
+    except ImportError: pass
+    xuat(issues, ct, dons, a.out, de_xuat, co_ten=a.ho_ten, dinh_chi=DC.doi_chieu_danh_muc(Q.get("dc") or [], dm))
+    if a.json:
+        for d in dons:
+            d["icd_dung"] = sorted(d.get("icd_dung", [])); d.pop("ho_ten", None); d.pop("ma_bn", None)   # JSON không chứa tên BN
+        json.dump(dict(don=dons, chi_tiet=ct, van_de=issues), open(a.json, "w", encoding="utf-8"), ensure_ascii=False, indent=1, default=str)
+    c = collections.Counter(i["muc"] for i in issues)
+    print(f"Đơn: {len(dons)} | dòng thuốc: {len(ct)} | vấn đề: {len(issues)} {dict(c)}")
+    print("Phù hợp ICD:", dict(collections.Counter(x["phu_hop_icd"] for x in ct)))
+    print("Tiêu chí:", dict(collections.Counter(i["tieu_chi"] for i in issues)))

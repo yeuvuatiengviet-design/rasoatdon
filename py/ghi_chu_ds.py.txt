@@ -1,0 +1,133 @@
+# -*- coding: utf-8 -*-
+"""Lớp nhận xét DS lâm sàng tự động, chạy sau ra_soat().
+- Quy tắc chung (cài sẵn trong code).
+- Quy tắc riêng do DS tự thêm trong file du_lieu/Ghi_chu_DS.xlsx (không cần sửa code).
+Mỗi quy tắc: điều kiện -> (mức độ mới hoặc giữ nguyên, nhận xét)."""
+import re, collections, unicodedata
+import openpyxl
+
+
+def ud(s):
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+
+
+def _icd(i):
+    return [x.strip().upper() for x in re.split(r"[,;\s]+", f"{i.get('icd_chinh') or ''},{i.get('icd_kem') or ''}") if x.strip()]
+
+
+def _co_icd(codes, spec):
+    for t in [x.strip().upper() for x in re.split(r"[,;]", spec or "") if x.strip()]:
+        if "-" in t:
+            a, b = t.split("-", 1)
+            if any(a <= c[:len(a)] <= b for c in codes): return True
+        elif any(c.startswith(t) for c in codes): return True
+    return False
+
+
+def _tuoi(i):
+    try: return float(str(i.get("tuoi")).replace(",", "."))
+    except Exception: return None
+
+
+# ---------------- quy tắc chung ----------------
+def quy_tac_chung(i, cach_dung):
+    t, tc, vd = ud(i.get("thuoc")), i.get("tieu_chi") or "", ud(i.get("van_de"))
+    cd = ud(cach_dung)
+    codes = _icd(i)
+    # Liều: lời dặn nhiều giai đoạn -> script cộng dồn
+    if tc == "Liều dùng" and re.search(r"tuan dau|ngay dau|sau do|roi giam|tiep theo", cd):
+        return "Tham khảo", "Lời dặn có nhiều giai đoạn (vd 'tuần đầu… sau đó…') – chương trình có thể cộng dồn liều các giai đoạn. DS đọc lại lời dặn trước khi kết luận vượt liều."
+    # Liều dưới khuyến cáo
+    if tc == "Liều dưới khuyến cáo":
+        if re.search(r"tuan dau|ngay dau|sau do|roi giam|tiep theo|cach ngay|thu [2-7]|cn\b|chu nhat", cd):
+            return "Tham khảo", "Lời dặn có nhiều giai đoạn/cách ngày/theo thứ trong tuần – chương trình có thể chỉ tính 1 giai đoạn. DS đọc lại lời dặn trước khi kết luận dưới liều."
+        if "khang_sinh" in ud(i.get("van_de")) or re.search(r"cillin|cef|clav|cin\b|mycin|cotrimox|metronid|aciclo|acyclo", t + " " + ud(i.get("hoat_chat"))):
+            return None, "Kháng sinh/kháng virus dưới liều HDSD: nguy cơ thất bại điều trị và chọn lọc vi khuẩn kháng – đề nghị kê đủ liều (trừ khi giảm liều do suy thận có ghi nhận)."
+        return None, "Liều thấp hơn liều thấp nhất trong HDSD – nếu bác sĩ chủ ý giảm liều (dung nạp kém, suy thận/gan, cao tuổi, đang chỉnh liều) đề nghị ghi rõ lý do trong bệnh án/đơn."
+    # Liều: phân số viên (1/2, 1/4)
+    if tc == "Liều dùng" and re.search(r"\b1/[234]\b", cd):
+        return "Cần lưu ý", "Lời dặn có liều phân số (1/2, 1/4 viên) – kiểm tra lại cách chương trình đọc số lượng/lần trước khi kết luận."
+    # Liều: diosmin/flavonoid trĩ cấp
+    if tc == "Liều dùng" and re.search(r"diosmin|flavonoid|pelethrocin|daflon", t + " " + ud(i.get("hoat_chat"))) and _co_icd(codes, "K64"):
+        return "Tham khảo", "BN có mã trĩ (K64): HDSD diosmin/flavonoid cho phép liều tấn công cao hơn trong cơn trĩ cấp – kiểm tra phác đồ trĩ cấp trước khi kết luận."
+    # Trùng nhóm: insulin nền + nhanh là phác đồ basal-bolus
+    if tc.startswith("Trùng nhóm") and "insulin" in vd and re.search(r"actrapid|humulin r|novorapid|apidra", t) and re.search(r"basaglar|lantus|levemir|toujeo|tresiba", t):
+        return "Tham khảo", "Insulin nhanh + insulin nền là phác đồ basal–bolus có chủ ý, không phải trùng nhóm."
+    if tc.startswith("Trùng nhóm"):
+        return None, "Hai thuốc cùng nhóm/hoạt chất trong một đơn – xác minh có chủ ý phối hợp hay đổi thuốc mà quên xóa thuốc cũ; kiểm tra tổng liều hoạt chất."
+    if tc == "Trùng thuốc":
+        return None, "Cùng một thuốc kê 2 dòng trong đơn – nguy cơ BN uống gấp đôi; đề nghị gộp/xóa 1 dòng."
+    if tc.startswith("ICD – điều kiện"):
+        return None, "Không có mã ICD đạt điều kiện thanh toán BHYT → nguy cơ xuất toán toàn bộ tiền thuốc. Bổ sung đúng mã nếu BN thực sự có bệnh."
+    if tc == "Danh mục":
+        return None, "Thuốc chưa có trong Danh mục thông tin thuốc – chưa đối chiếu được HDSD; đề nghị bổ sung vào danh mục."
+    if tc == "Thuốc nguy cơ cao" and "insulin" in (t + vd) and not re.search(r"\b(ui|iu|don vi)\b", cd):
+        return None, "Insulin là thuốc nguy cơ cao: lời dặn không ghi đơn vị 'UI/đơn vị' – yêu cầu ghi rõ để tránh nhầm liều."
+    if tc == "Chống chỉ định theo tuổi":
+        return None, "Thuốc không phù hợp lứa tuổi theo HDSD – đề nghị đổi thuốc dùng được cho lứa tuổi này."
+    if tc.startswith("ICD – chỉ định") and _co_icd(codes, "E75.5") and re.search(r"statin|fibrat|ezetimib", ud(i.get("hoat_chat")) + vd):
+        return None, "BN có mã E75.5 – nhiều khả năng mã sai cho rối loạn lipid máu (E78.x). Sửa mã E78 thì thuốc phù hợp chỉ định."
+    return None, None
+
+
+# ---------------- quy tắc riêng của DS (file Excel) ----------------
+COT = ["Thuốc (tên chứa)", "Tiêu chí (bắt đầu bằng)", "Đơn có ICD", "Lời dặn chứa", "Tuổi dưới", "Chuyển mức độ thành", "Nhận xét DS"]
+
+
+def doc_ghi_chu(path):
+    if not path: return []
+    try: wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception: return []
+    ws = wb.worksheets[0]
+    out = []
+    for r in ws.iter_rows(min_row=2, values_only=True):
+        r = list(r) + [None] * 7
+        if not r[6]: continue
+        out.append(dict(thuoc=ud(r[0]).strip(), tc=str(r[1] or "").strip(), icd=str(r[2] or ""),
+                        cd=ud(r[3]).strip(), tuoi=r[4], muc=str(r[5] or "").strip() or None, nx=str(r[6]).strip()))
+    return out
+
+
+def quy_tac_rieng(i, cach_dung, rules):
+    t, tc, cd = ud(i.get("thuoc")), i.get("tieu_chi") or "", ud(cach_dung)
+    for q in rules:
+        if q["thuoc"] and q["thuoc"] not in t: continue
+        if q["tc"] and not tc.startswith(q["tc"]): continue
+        if q["icd"] and not _co_icd(_icd(i), q["icd"]): continue
+        if q["cd"] and q["cd"] not in cd: continue
+        if q["tuoi"] not in (None, ""):
+            a = _tuoi(i)
+            try:
+                if a is None or a >= float(q["tuoi"]): continue
+            except Exception: continue
+        return (q["muc"] if q["muc"] in ("Nghiêm trọng", "Cần lưu ý", "Tham khảo") else None), q["nx"]
+    return None, None
+
+
+def ap_dung(issues, chi_tiet, path_ghi_chu=None):
+    rules = doc_ghi_chu(path_ghi_chu)
+    cd_map = collections.defaultdict(list)
+    for c in chi_tiet: cd_map[c["lk"]].append((c["thuoc"], c.get("cach_dung") or ""))
+    doi = collections.Counter()
+    for i in issues:
+        cd = " ".join(v for th, v in cd_map.get(i["lk"], ()) if th and th in (i.get("thuoc") or ""))
+        muc, nx = quy_tac_rieng(i, cd, rules)        # quy tắc riêng ưu tiên
+        if not nx: muc, nx = quy_tac_chung(i, cd)
+        if nx: i["nhan_xet"] = nx
+        if muc and muc != i["muc"]:
+            doi[(i["muc"], muc)] += 1; i["muc"] = muc
+    return doi
+
+
+def de_xuat_bo_sung(issues, chi_tiet):
+    """Gợi ý bổ sung danh mục/quy tắc dựa trên các dòng chưa đối chiếu được."""
+    out = []
+    c = collections.Counter(i["thuoc"] for i in issues if i["tieu_chi"] == "Danh mục")
+    for k, v in c.most_common():
+        out.append(dict(loai="Danh mục", thuoc=k, noi_dung="Bổ sung thuốc vào Danh mục thông tin thuốc + sheet Thuoc_HDSD", ly_do=f"{v} dòng kê không đối chiếu được"))
+    c = collections.Counter(x["thuoc"] for x in chi_tiet if x.get("phu_hop_icd") in ("Chưa có quy tắc", "Chưa đối chiếu HDSD"))
+    for k, v in c.most_common(30):
+        if v >= 2:
+            out.append(dict(loai="Thuoc_HDSD", thuoc=k, noi_dung="Bổ sung quy tắc ICD/liều theo tờ HDSD", ly_do=f"{v} dòng chưa đối chiếu"))
+    return out
