@@ -466,3 +466,8 @@ addEventListener("appinstalled", () => { $("installbox").hidden = true; });
 setTimeout(() => { if (!standalone() && !hideInstall && $("installbox").hidden) { $("installbox").hidden = false; } }, 6000);
 
 document.addEventListener("click", e => { const b = e.target.closest("[data-thuoc]"); if (b) moThuoc(b.dataset.thuoc); });
+
+// nút "Cài app" luôn có ở thanh trên khi chưa cài
+if (!standalone()) $("instTop").hidden = false;
+$("instTop").onclick = () => { $("installbox").hidden = false; scrollTo({top: 0, behavior: "smooth"}); $("installbtn").click(); };
+addEventListener("appinstalled", () => { $("instTop").hidden = true; });

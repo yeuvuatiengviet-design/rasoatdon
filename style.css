@@ -104,3 +104,4 @@ details.fold>summary::-webkit-details-marker{display:none}
 details.fold>summary::after{content:"▾";color:var(--mut)}
 details.fold[open]>summary::after{content:"▴"}
 .foldin{padding:0 12px 12px;display:grid;gap:8px}
+.chip.inst{background:var(--acc);color:var(--acc-ink);border-color:var(--acc);font-weight:700;cursor:pointer;min-height:0;padding:3px 10px}

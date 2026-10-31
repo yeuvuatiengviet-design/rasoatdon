@@ -1,5 +1,5 @@
 /* Service worker: lưu ứng dụng trên máy để dùng không cần mạng; khi có mạng tự lấy bản mới của quy tắc */
-const SHELL = "rasoatdon-app-v5", VENDOR = "rasoatdon-vendor-v1";
+const SHELL = "rasoatdon-app-v6", VENDOR = "rasoatdon-vendor-v1";
 const FILES = ["./", "index.html", "app.js", "style.css", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "py/chay_app.py.txt", "py/dinh_chi.py.txt", "py/ghi_chu_ds.py.txt", "py/ra_soat.py.txt", "py/shim_openpyxl.py.txt", "py/thoi_diem.py.txt", "py/tuong_tac.py.txt", "data/danh_muc.json", "data/ghi_chu.json", "data/quy_tac.json", "data/thoi_diem.json", "data/version.json", "vendor/pyodide/pyodide-lock.json", "vendor/pyodide/pyodide.asm.js", "vendor/pyodide/pyodide.asm.wasm", "vendor/pyodide/pyodide.js", "vendor/pyodide/python_stdlib.zip", "vendor/tesseract/tesseract-core-lstm.js", "vendor/tesseract/tesseract-core-lstm.wasm", "vendor/tesseract/tesseract-core-lstm.wasm.js", "vendor/tesseract/tesseract-core-simd-lstm.js", "vendor/tesseract/tesseract-core-simd-lstm.wasm", "vendor/tesseract/tesseract-core-simd-lstm.wasm.js", "vendor/tesseract/tesseract.min.js", "vendor/tesseract/worker.min.js", "vendor/lang/vie.traineddata.gz"];
 self.addEventListener("install", e => {
   e.waitUntil((async () => {
