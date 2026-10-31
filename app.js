@@ -457,7 +457,7 @@ $("installbtn").onclick = async () => {
     installEvt.prompt(); const r = await installEvt.userChoice.catch(() => null); installEvt = null;
     if (r && r.outcome === "accepted") $("installbox").hidden = true;
   } else {
-    $("installtxt").innerHTML = "Trong Chrome: bấm nút <b>⋮</b> góc trên bên phải → <b>Thêm vào màn hình chính</b> (hoặc <b>Cài đặt ứng dụng</b>) → <b>Cài đặt</b>.";
+    $("installtxt").innerHTML = huongDanCai();
   }
 };
 $("installno").onclick = () => { $("installbox").hidden = true; try { localStorage.setItem("an_cai_dat", "1"); } catch {} };
@@ -471,3 +471,16 @@ document.addEventListener("click", e => { const b = e.target.closest("[data-thuo
 if (!standalone()) $("instTop").hidden = false;
 $("instTop").onclick = () => { $("installbox").hidden = false; scrollTo({top: 0, behavior: "smooth"}); $("installbtn").click(); };
 addEventListener("appinstalled", () => { $("instTop").hidden = true; });
+
+/* hướng dẫn cài theo loại máy/trình duyệt */
+function huongDanCai() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const inApp = /Zalo|FBAN|FBAV|FB_IAB|Instagram|Messenger|Line\/|; wv\)/i.test(ua);
+  if (ios && !/Safari/i.test(ua) || ios && /CriOS|FxiOS|Zalo/i.test(ua))
+    return "Trên iPhone phải dùng <b>Safari</b>: bấm <b>⋯</b> hoặc biểu tượng la bàn → <b>Mở trong Safari</b>, rồi làm theo bước dưới.";
+  if (ios) return "Trên iPhone (Safari): bấm nút <b>Chia sẻ</b> (ô vuông có mũi tên lên, ở thanh dưới) → kéo xuống chọn <b>Thêm vào MH chính</b> → <b>Thêm</b>.";
+  if (inApp) return "Trang đang mở trong trình duyệt của Zalo/Facebook nên không cài được. Bấm <b>⋮</b> góc trên bên phải → <b>Mở bằng Chrome</b> (hoặc <b>Mở trong trình duyệt</b>), rồi bấm lại nút Cài.";
+  return "Trong Chrome: bấm nút <b>⋮</b> góc trên bên phải → <b>Thêm vào màn hình chính</b> (hoặc <b>Cài đặt ứng dụng</b>) → <b>Cài đặt</b>. Nếu menu không có mục này, bấm <b>⋮</b> → <b>Mở bằng Chrome</b> trước.";
+}
+$("installtxt").innerHTML = huongDanCai();
