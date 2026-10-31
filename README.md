@@ -9,9 +9,12 @@
 4. Từ đó mở bằng biểu tượng "Rà soát đơn" như một ứng dụng bình thường, kể cả khi tắt mạng.
 
 ## Dùng
-1. **Chụp ảnh đơn** (hoặc chọn ảnh có sẵn; đơn nhiều trang chọn nhiều ảnh).
-2. Kiểm tra tuổi, ngày kê, ICD, thuốc, số lượng, cách dùng; sửa chỗ đọc sai. Thuốc viền vàng là chưa khớp danh mục.
-3. **Rà soát đơn** → vấn đề theo mức Nghiêm trọng / Cần lưu ý / Tham khảo. "Sao chép" hoặc "Gửi" để trao đổi với bác sĩ (không có họ tên BN).
+**Tab Rà soát đơn**
+1. Bấm **Chụp đơn** ở thanh dưới (hoặc **Chọn ảnh**; đơn nhiều trang chọn nhiều ảnh). Kết quả hiện ngay ở đầu trang.
+2. Kiểm tra phần Dữ liệu đơn; sửa chỗ đọc sai – kết quả tự cập nhật. Thuốc khung vàng là chưa khớp danh mục.
+3. "Sao chép" hoặc "Gửi Zalo/tin nhắn" để trao đổi với bác sĩ (không có họ tên BN).
+
+**Tab Tra cứu thuốc** – gõ tên thuốc/hoạt chất (hoặc mã ICD để xem thuốc có chỉ định đó): ICD theo HDSD, giới hạn liều, thời điểm dùng, văn bản thu hồi, chỉ định/CCĐ theo tờ HDSD và các thuốc trong danh mục có tương tác.
 
 ## Cập nhật
 Khi có mạng, ứng dụng tự lấy bộ quy tắc mới (danh mục, tương tác, công văn thu hồi…). Bấm "Kiểm tra cập nhật" để kiểm tra ngay.
