@@ -38,7 +38,7 @@
 <div id="pane-rs" role="tabpanel" aria-labelledby="tab-rs" style="display:grid;gap:12px">
   <section class="card" id="kq" aria-labelledby="h3s">
     <h2 id="h3s">Kết quả rà soát <span class="mut small" id="src"></span></h2>
-    <div class="status" id="st">Bấm <b>Chụp đơn</b> ở dưới. Chụp thẳng, đủ sáng, cả tờ đơn trong khung. Đọc chữ ngay trên điện thoại, không cần mạng.</div>
+    <div class="status" id="st">Bấm <b>Quét đơn</b> ở dưới, đặt tờ đơn vừa khung xanh rồi chụp; sau đó kéo 4 góc cho khớp mép giấy. Đọc chữ ngay trên điện thoại, không cần mạng.</div>
     <div class="prog" id="prog" hidden><i id="progbar"></i></div>
     <div class="thumbs" id="thumbs"></div>
     <div class="sum" id="sum" hidden>
@@ -90,14 +90,32 @@
 </main>
 
 <div class="dock" id="dock"><div class="in">
-  <label class="btn primary" for="cam">Chụp đơn<input id="cam" type="file" accept="image/*" capture="environment"></label>
+  <button class="btn primary" id="scanBtn" type="button">Quét đơn</button>
+  <input id="cam" type="file" accept="image/*" capture="environment" hidden>
   <label class="btn" for="pick">Chọn ảnh<input id="pick" type="file" accept="image/*" multiple></label>
 </div></div>
 
+<div class="ov scan" id="scan" hidden>
+  <video id="video" playsinline muted></video>
+  <div class="shade"></div>
+  <div class="frame" id="frame"><i class="c tl"></i><i class="c tr"></i><i class="c bl"></i><i class="c br"></i><span class="lbl">Đặt cả tờ đơn vừa trong khung</span></div>
+  <div class="scantop"><button type="button" class="ovbtn" id="scanClose">✕ Đóng</button><span id="pageNo" class="pg"></span><button type="button" class="ovbtn" id="torch" hidden>Đèn</button></div>
+  <div class="scanbot"><div id="scanHint" class="hint">Đang mở camera…</div><button type="button" class="shutter" id="snap" aria-label="Chụp"></button>
+  <div class="tips">Giữ máy song song mặt giấy · đủ sáng, không bóng tay · chữ nằm ngang</div></div>
+</div>
+<div class="ov crop" id="crop" hidden>
+  <div class="croptop">Kéo 4 chấm tròn cho khớp 4 góc tờ đơn</div>
+  <div class="cropbox" id="cropBox"><canvas id="cropImg"></canvas>
+    <svg class="poly"><polygon id="cropPoly"></polygon></svg>
+    <span class="hd" id="h0"></span><span class="hd" id="h1"></span><span class="hd" id="h2"></span><span class="hd" id="h3"></span></div>
+  <div class="cropbot"><button type="button" class="ovbtn" id="cropRetake">Chụp lại</button><button type="button" class="ovbtn" id="cropRotate">Xoay ⟳</button><button type="button" class="ovbtn" id="cropFull">Cả ảnh</button><button type="button" class="ovbtn primary" id="cropOk">Dùng ảnh</button></div>
+</div>
+<div class="ov more" id="more" hidden><div class="morebox"><p id="moreTxt"></p><div class="row"><button type="button" id="moreYes" style="flex:1">Chụp trang tiếp</button><button type="button" class="primary" id="moreNo" style="flex:1">Đọc đơn</button></div></div></div>
 <datalist id="dmlist"></datalist>
 <datalist id="dvlist"><option value="Viên"></option><option value="Gói"></option><option value="Ống"></option><option value="Chai"></option><option value="Lọ"></option><option value="Tuýp"></option><option value="Bút"></option><option value="Túi"></option></datalist>
 <script src="vendor/tesseract/tesseract.min.js" defer></script>
 <script src="vendor/pyodide/pyodide.js"></script>
 <script src="app.js"></script>
+<script src="scan.js"></script>
 </body>
 </html>

@@ -414,14 +414,15 @@ async function readPhotos(files) {
   if (!files.length) return;
   tab("rs");
   files = [...files].slice(0, 4);
-  $("thumbs").innerHTML = ""; files.forEach(f => { const im = document.createElement("img"); im.alt = "Ảnh đơn"; im.src = URL.createObjectURL(f); $("thumbs").append(im); });
+  const isCv = f => f instanceof HTMLCanvasElement;
+  $("thumbs").innerHTML = ""; files.forEach(f => { const im = document.createElement("img"); im.alt = "Ảnh đơn"; im.src = isCv(f) ? f.toDataURL("image/jpeg", 0.4) : URL.createObjectURL(f); $("thumbs").append(im); });
   ["sum", "acts", "ctbox"].forEach(id => $(id).hidden = true); $("issues").innerHTML = "";
   $("st").className = "status"; $("st").textContent = "Đang chuẩn bị bộ đọc chữ…"; setProg(0.02);
-  $("cam").disabled = $("pick").disabled = true;
+  $("scanBtn").disabled = true;
   scrollTo({top: 0, behavior: "smooth"});
   try {
     await dataReady;
-    const imgs = await Promise.all(files.map(prep));
+    const imgs = await Promise.all(files.map(f => isCv(f) ? f : prep(f)));
     const w = await (ocrReady || getOcr()) || await getOcr();
     let text = "";
     for (let k = 0; k < imgs.length; k++) {
@@ -439,10 +440,9 @@ async function readPhotos(files) {
   } catch (e) {
     $("st").className = "status err";
     $("st").textContent = "Chưa đọc được đơn từ ảnh (" + (e.message || e) + "). Chụp lại thẳng, đủ sáng, rõ chữ, hoặc nhập tay ở phần Dữ liệu đơn.";
-  } finally { setProg(null); ocrProgress = () => {}; $("cam").disabled = $("pick").disabled = false; $("cam").value = ""; $("pick").value = ""; }
+  } finally { setProg(null); ocrProgress = () => {}; $("scanBtn").disabled = false; }
 }
-$("cam").onchange = e => readPhotos(e.target.files);
-$("pick").onchange = e => readPhotos(e.target.files);
+
 
 /* ---------- cài ra màn hình chính ---------- */
 let installEvt = null;

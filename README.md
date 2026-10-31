@@ -10,7 +10,7 @@
 
 ## Dùng
 **Tab Rà soát đơn**
-1. Bấm **Chụp đơn** ở thanh dưới (hoặc **Chọn ảnh**; đơn nhiều trang chọn nhiều ảnh). Kết quả hiện ngay ở đầu trang.
+1. Bấm **Quét đơn**: đặt cả tờ đơn vừa khung (khung chuyển xanh khi đủ sáng, đủ nét) → bấm nút tròn → kéo 4 chấm cho khớp 4 góc tờ đơn → **Dùng ảnh** → chụp trang tiếp hoặc **Đọc đơn**. (Hoặc **Chọn ảnh** có sẵn.) Kết quả hiện ngay ở đầu trang.
 2. Kiểm tra phần Dữ liệu đơn; sửa chỗ đọc sai – kết quả tự cập nhật. Thuốc khung vàng là chưa khớp danh mục.
 3. "Sao chép" hoặc "Gửi Zalo/tin nhắn" để trao đổi với bác sĩ (không có họ tên BN).
 
