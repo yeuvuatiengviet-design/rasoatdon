@@ -95,3 +95,12 @@ pre.raw{white-space:pre-wrap;font-size:.78rem;background:var(--bg);border:1px so
 .dl dd.bad{color:var(--crit);font-weight:600} .dl dd.warnc{color:var(--warn);font-weight:600}
 h3.sec{font-size:.92rem;margin:6px 0 0;padding-top:8px;border-top:1px solid var(--line)}
 .issue .link.t{font-size:.95rem;font-weight:600;color:var(--fg);text-align:left;padding:0}
+ul.li{margin:0;padding-left:20px;display:grid;gap:6px;font-size:.9rem;line-height:1.45}
+ul.li li::marker{color:var(--acc)}
+.folds{display:grid;gap:8px;margin-top:6px}
+details.fold{border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+details.fold>summary{cursor:pointer;list-style:none;padding:11px 12px;font-weight:600;font-size:.9rem;display:flex;justify-content:space-between;align-items:center;gap:8px}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::after{content:"▾";color:var(--mut)}
+details.fold[open]>summary::after{content:"▴"}
+.foldin{padding:0 12px 12px;display:grid;gap:8px}

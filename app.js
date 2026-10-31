@@ -354,22 +354,31 @@ function showInfo(d) {
   }
   items.sort((x, y) => (MTT[x.m] ?? 9) - (MTT[y.m] ?? 9));
   const mcls = m => "m" + String(MTT[m] ?? 3).replace(".", "");
-  $("info").innerHTML = `<h2>${esc(d.ten)}</h2>
-    ${d.dc.map(v => `<div class="issue m1"><div class="t">${esc(v.loai)} – ${esc(v.so_van_ban)} (${esc(v.ngay_van_ban)})</div><p>${esc(v.pham_vi === "Toàn bộ" ? "Toàn bộ các lô" : "Lô " + (v.so_lo || "?") + (v.han_dung ? ", HD " + v.han_dung : ""))}${v.ly_do ? " – " + esc(v.ly_do) : ""}${v.so_dang_ky ? " – SĐK " + esc(v.so_dang_ky) : ""}</p>${v.link ? `<a class="small" href="${esc(v.link)}" target="_blank" rel="noopener">Xem văn bản</a>` : ""}</div>`).join("")}
-    <dl class="dl">${row("Hoạt chất", d.hc)}${row("Hàm lượng", d.hl)}${row("Dạng bào chế", d.dang)}${row("Đường dùng", d.duong)}</dl>
-    <h3 class="sec">Quy tắc kê đơn</h3>
-    <dl class="dl">${row("ICD đúng chỉ định", hd.icd_HDSD === "*" ? "Không đối chiếu ICD (thuốc triệu chứng/thủ thuật)" : hd.icd_HDSD)}${row("ICD chỉ định có điều kiện", hd.icd_HDSD_co_dieu_kien)}
+  const list = t => {
+    const it = String(t || "").replace(/\r/g, "").split(/\n+|;\s+|(?:^|\s)[-–•●]\s+|(?:^|\s)\+\s+/).map(x => x.trim()).filter(x => x.length > 1);
+    return it.length ? `<ul class="li">${it.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : '<p class="mut small" style="margin:0">Danh mục chưa có nội dung.</p>';
+  };
+  const box = (title, body, extra) => `<details class="fold"${extra || ""}><summary>${title}</summary><div class="foldin">${body}</div></details>`;
+  const ruleDl = `<dl class="dl">${row("ICD đúng chỉ định", hd.icd_HDSD === "*" ? "Không đối chiếu ICD (thuốc triệu chứng/thủ thuật)" : hd.icd_HDSD)}${row("ICD chỉ định có điều kiện", hd.icd_HDSD_co_dieu_kien)}
     ${row("ICD bắt buộc kèm", hd.icd_can_kem)}${row("ICD chống chỉ định", ccd, "bad")}${row("ICD chống chỉ định – xác định mức độ", kt, "warnc")}${row("ICD thận trọng", thtr)}
     ${row("Căn cứ chống chỉ định", hd.ccd_can_cu)}
     ${row("Tuổi", [hd.tuoi_ccd ? "Chống chỉ định dưới " + hd.tuoi_ccd + " tuổi" : "", hd.tuoi_hdsd_tu ? "HDSD có chỉ định từ " + hd.tuoi_hdsd_tu + " tuổi" : ""].filter(Boolean).join("; "))}
     ${row("Giới hạn liều", lieu)}${row("Liều tóm tắt", hd.lieu_tom_tat)}${row("Ghi chú quy tắc", hd.ghi_chu)}
-    ${row("Thời điểm dùng", tdv)}${row("Trích HDSD về cách uống", d.td ? d.td[7] : "")}
-    ${row("Nguồn quy tắc", [hd.nguon, hd.trang_thai].filter(Boolean).join(" · "))}</dl>
-    <h3 class="sec">Thông tin theo tờ hướng dẫn sử dụng</h3>
-    <dl class="dl">${row("Chỉ định", d.cd)}${row("Liều dùng", d.lieu)}${row("Cách dùng", d.cach)}${row("Chống chỉ định", d.ccd)}${row("Thận trọng", d.tt)}${row("Phụ nữ có thai, cho con bú", d.pnct)}${row("Tương tác thuốc", d.tuongtac)}${row("Tác dụng không mong muốn", d.tdkmm)}${row("Ghi chú đối chiếu", d.gc)}</dl>
-    ${d.link ? `<p class="small" style="margin:0"><a href="${esc(d.link)}" target="_blank" rel="noopener">Mở tờ HDSD gốc (cần mạng)</a></p>` : ""}
-    <h3 class="sec">Tương tác với thuốc trong danh mục <span class="small mut">${items.length} nhóm</span></h3>
-    <div class="tt">${items.length ? items.map(x => `<div class="ttr ${mcls(x.m)}"><b>${esc(x.m)}</b>${x.qd ? " · QĐ 5948" : ""} – ${esc(x.hq.join("; "))}${x.dk.length ? `<br><span class="small">Điều kiện: ${esc(x.dk.join("; "))}</span>` : ""}<br><span class="mut">Với: ${esc(x.ds.join(", "))}</span><br><span class="small">Cơ chế: ${esc(x.cc.join("; "))}</span><br><span class="small">→ ${esc(x.xt.join(" | "))}</span><br><span class="small mut">Nguồn: ${esc(x.ng.join("; "))}</span></div>`).join("") : '<p class="mut small" style="margin:0">Chưa có quy tắc tương tác nào với thuốc khác trong danh mục.</p>'}</div>`;
+    ${row("Thời điểm dùng", tdv)}${row("Trích HDSD về cách uống", d.td ? d.td[7] : "")}${row("Nguồn quy tắc", [hd.nguon, hd.trang_thai].filter(Boolean).join(" · "))}</dl>`;
+  const hdsdDl = `<dl class="dl">${row("Liều dùng", d.lieu)}${row("Cách dùng", d.cach)}${row("Thận trọng", d.tt)}${row("Phụ nữ có thai, cho con bú", d.pnct)}${row("Tương tác thuốc", d.tuongtac)}${row("Tác dụng không mong muốn", d.tdkmm)}${row("Ghi chú đối chiếu", d.gc)}</dl>
+    ${d.link ? `<p class="small" style="margin:6px 0 0"><a href="${esc(d.link)}" target="_blank" rel="noopener">Mở tờ HDSD gốc (cần mạng)</a></p>` : ""}`;
+  const ttHtml = items.length ? `<div class="tt">${items.map(x => `<div class="ttr ${mcls(x.m)}"><b>${esc(x.m)}</b>${x.qd ? " · QĐ 5948" : ""} – ${esc(x.hq.join("; "))}${x.dk.length ? `<br><span class="small">Điều kiện: ${esc(x.dk.join("; "))}</span>` : ""}<br><span class="mut">Với: ${esc(x.ds.join(", "))}</span><br><span class="small">Cơ chế: ${esc(x.cc.join("; "))}</span><br><span class="small">→ ${esc(x.xt.join(" | "))}</span><br><span class="small mut">Nguồn: ${esc(x.ng.join("; "))}</span></div>`).join("")}</div>` : '<p class="mut small" style="margin:0">Chưa có quy tắc tương tác nào với thuốc khác trong danh mục.</p>';
+  const dcHtml = d.dc.map(v => `<div class="issue m1"><div class="t">${esc(v.loai)} – ${esc(v.so_van_ban)} (${esc(v.ngay_van_ban)})</div><p>${esc(v.pham_vi === "Toàn bộ" ? "Toàn bộ các lô" : "Lô " + (v.so_lo || "?") + (v.han_dung ? ", HD " + v.han_dung : ""))}${v.ly_do ? " – " + esc(v.ly_do) : ""}${v.so_dang_ky ? " – SĐK " + esc(v.so_dang_ky) : ""}</p>${v.link ? `<a class="small" href="${esc(v.link)}" target="_blank" rel="noopener">Xem văn bản</a>` : ""}</div>`).join("");
+  $("info").innerHTML = `<h2>${esc(d.ten)}</h2>
+    <p class="small mut" style="margin:0">${esc([d.hc, d.hl, d.dang, d.duong].filter(Boolean).join(" · "))}</p>
+    <h3 class="sec">Chỉ định <span class="small mut">(theo tờ HDSD)</span></h3>${list(d.cd)}
+    <h3 class="sec">Chống chỉ định <span class="small mut">(theo tờ HDSD)</span></h3>${list(d.ccd)}
+    <div class="folds">
+    ${d.dc.length ? box(`<span class="pill s1">Văn bản thu hồi (${d.dc.length})</span>`, dcHtml) : ""}
+    ${box(`Tương tác & nguy cơ <span class="small mut">${items.length} nhóm</span>`, ttHtml)}
+    ${box("Quy tắc kê đơn (ICD, liều, thời điểm uống)", ruleDl)}
+    ${box("Liều dùng, thận trọng, tác dụng phụ… (tờ HDSD)", hdsdDl)}
+    </div>`;
   $("info").hidden = false; $("info").scrollIntoView({behavior: "smooth", block: "start"});
 }
 function moThuoc(ten) {
