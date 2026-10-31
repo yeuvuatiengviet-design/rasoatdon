@@ -419,3 +419,24 @@ async function readPhotos(files) {
 }
 $("cam").onchange = e => readPhotos(e.target.files);
 $("pick").onchange = e => readPhotos(e.target.files);
+
+/* ---------- cài ra màn hình chính ---------- */
+let installEvt = null;
+const standalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+let hideInstall = false; try { hideInstall = localStorage.getItem("an_cai_dat") === "1"; } catch {}
+addEventListener("beforeinstallprompt", e => {
+  e.preventDefault(); installEvt = e;
+  if (!standalone() && !hideInstall) $("installbox").hidden = false;
+});
+$("installbtn").onclick = async () => {
+  if (installEvt) {
+    installEvt.prompt(); const r = await installEvt.userChoice.catch(() => null); installEvt = null;
+    if (r && r.outcome === "accepted") $("installbox").hidden = true;
+  } else {
+    $("installtxt").innerHTML = "Trong Chrome: bấm nút <b>⋮</b> góc trên bên phải → <b>Thêm vào màn hình chính</b> (hoặc <b>Cài đặt ứng dụng</b>) → <b>Cài đặt</b>.";
+  }
+};
+$("installno").onclick = () => { $("installbox").hidden = true; try { localStorage.setItem("an_cai_dat", "1"); } catch {} };
+addEventListener("appinstalled", () => { $("installbox").hidden = true; });
+// Chrome chưa báo được (đang tải lần đầu, hoặc trình duyệt khác): vẫn hiện hướng dẫn thủ công sau vài giây
+setTimeout(() => { if (!standalone() && !hideInstall && $("installbox").hidden) { $("installbox").hidden = false; } }, 6000);

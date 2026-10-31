@@ -303,8 +303,9 @@ def ra_soat(dons, dm, Q, bang_td=None):
                 if spec == "*":
                     m2, l2 = "Phù hợp", "Không đối chiếu ICD (thuốc theo triệu chứng/thủ thuật)"
                 else:
-                    ph = any_icd(icds, spec)
-                    dk = any_icd(icds, hd.get("icd_HDSD_co_dieu_kien"))
+                    ccd_c = set(c for r in rules for c in any_icd(icds, r.get("icd_ccd_tuyet_doi")))   # mã chống chỉ định không bao giờ tính là đúng chỉ định
+                    ph = [c for c in any_icd(icds, spec) if c not in ccd_c]
+                    dk = [c for c in any_icd(icds, hd.get("icd_HDSD_co_dieu_kien")) if c not in ccd_c]
                     pd = [c for r in rules for c in any_icd(icds, r.get("icd_phu_hop")) + any_icd(icds, r.get("icd_co_dieu_kien"))]
                     kem = str(hd.get("icd_can_kem") or "").strip()
                     dkt = str(hd.get("dk_thuoc") or "").strip()
