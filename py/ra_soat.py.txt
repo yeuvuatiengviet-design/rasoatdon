@@ -469,6 +469,8 @@ def ra_soat(dons, dm, Q, bang_td=None):
                 add(t["ten"], hc, "Cách dùng", f"Không xác định được liều/lần từ '{t['lieu']}'", "Tham khảo", "Ghi rõ số lượng mỗi lần dùng", "", "", muc_icd)
             # --- thời điểm dùng (trước/sau ăn, sáng/tối) theo HDSD ---
             rec_td = bang_td.get(norm(t["ten"])) or (bang_td.get(norm((info or {}).get("ten") or "")) if info else None)
+            if not rec_td and (re.search(r"uong|ngam", ud(t["lieu"])) or ud(t["dv"]).startswith(("vien", "goi"))) and not re.search(r"tiem|truyen", ud(t["lieu"]) + " " + ud((info or {}).get("duong"))):
+                rec_td = TD.theo_nhom(hc, t["ten"], (info or {}).get("hc"))       # thuốc chưa có trong bảng: quy tắc theo nhóm (PPI, levothyroxin…)
             td_hdsd = ""
             if rec_td:
                 td_hdsd = "; ".join(x for x in (TD.nhan(rec_td["bua"], TD.BUA) + (f" ({rec_td['phut']})" if rec_td["phut"] else ""),

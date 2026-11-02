@@ -237,6 +237,46 @@ def phan_tich_loi_dan(lieu):
     return dict(bua=bua, buoi=buoi)
 
 
+# ---------------- khoảng cách trước ăn (phút) ----------------
+_DV_T = r"(phut|ph|p|gio|tieng|h)\b"
+def _phut(n, dv): return float(n) * (60 if dv in ("gio", "tieng", "h") else 1)
+def phut_truoc_an(text):
+    """Khoảng cách uống trước bữa ăn (phút) → (min, max) hoặc None.
+    "trước ăn 30 phút", "30p trước ăn", "trước ăn sáng 1h", "trước ăn 30p-1h", "30–60 phút trước ăn", "ít nhất 1 giờ"."""
+    u = ud(text).replace(",", ".").replace("–", "-")
+    an = r"truoc (?:khi |cac |moi )?(?:bua )?an(?: sang| trua| toi| chieu)?"
+    so = r"(\d+(?:\.\d+)?)\s*(?:" + _DV_T + r")?(?:\s*(?:-|den|toi)\s*(\d+(?:\.\d+)?)\s*" + _DV_T + r")?"
+    m = re.search(an + r"\s*(?:it nhat |toi thieu |khoang |tu )?" + so, u) or re.search(so + r"\s*" + an, u)
+    if not m: return None
+    a, da, b, db = m.group(1), m.group(2), m.group(3), m.group(4)
+    if not da and not db: return None
+    da = da or db; db = db or da
+    lo, hi = _phut(a, da), _phut(b, db) if b else _phut(a, da)
+    if lo > 240 or hi > 240: return None
+    return (min(lo, hi), max(lo, hi))
+
+# ---------------- quy tắc theo nhóm hoạt chất (khi thuốc chưa có trong bảng Thoi_diem_dung) ----------------
+NHOM = [
+    (r"prazol", "Thuốc ức chế bơm proton (PPI)", {"truoc_an"}, {"sang"}, "30–60 phút trước ăn",
+     "PPI đường uống: uống trước bữa ăn 30–60 phút (thường trước bữa sáng), nuốt nguyên viên – Dược thư QG; tờ HDSD omeprazol/esomeprazol/pantoprazol."),
+    (r"sucralfat", "Sucralfat", {"luc_doi", "truoc_an"}, set(), "1 giờ trước ăn",
+     "Sucralfat: uống lúc đói, 1 giờ trước bữa ăn và trước khi ngủ – Dược thư QG."),
+    (r"domperidon|itoprid|mosaprid", "Thuốc chống nôn/tăng nhu động", {"truoc_an"}, set(), "15–30 phút trước ăn",
+     "Domperidon/itoprid: uống 15–30 phút trước bữa ăn – Dược thư QG, tờ HDSD."),
+    (r"metoclopramid", "Metoclopramid", {"truoc_an"}, set(), "30 phút trước ăn", "Metoclopramid: uống 30 phút trước bữa ăn – Dược thư QG."),
+    (r"levothyrox|thyrox", "Levothyroxin", {"luc_doi", "truoc_an"}, {"sang"}, "30–60 phút trước ăn",
+     "Levothyroxin: uống 1 lần buổi sáng lúc đói, 30–60 phút trước bữa sáng – Dược thư QG."),
+    (r"alendron|risedron|ibandron", "Bisphosphonat uống", {"luc_doi", "truoc_an"}, {"sang"}, "30 phút trước ăn",
+     "Bisphosphonat: uống buổi sáng lúc đói với cốc nước đầy, ít nhất 30 phút trước bữa ăn, không nằm sau uống – Dược thư QG."),
+]
+def theo_nhom(*ten):
+    u = " ".join(ud(x) for x in ten if x)
+    for rx, nhom, bua, buoi, phut, trich in NHOM:
+        if re.search(rx, u):
+            return dict(ten=nhom, hc=nhom, bua=set(bua), buoi=set(buoi), phut=phut, trich=trich, nguon="Quy tắc nhóm thuốc", link=None, ds=False, ghi_chu_ds="")
+    return None
+
+
 def doi_chieu(rec, lieu):
     """→ list (mức, vấn đề, đề xuất, căn cứ).
     - HDSD trước ăn/lúc đói mà đơn dặn sau/trong bữa ăn → Cần lưu ý (ảnh hưởng hấp thu/hiệu quả).
@@ -259,6 +299,17 @@ def doi_chieu(rec, lieu):
         elif H <= PRE and not D["bua"]:
             out.append(("Tham khảo", f"Lời dặn chưa ghi thời điểm so với bữa ăn; HDSD: uống {hd}",
                         f"Bổ sung lời dặn: uống {hd}", can))
+        # khoảng cách trước ăn: lời dặn ngắn hơn HDSD (vd PPI HDSD ≥1 giờ mà dặn trước ăn 15 phút)
+        if H & PRE and D["bua"] & PRE:
+            ph_hd = phut_truoc_an(rec.get("phut") or "") or phut_truoc_an(rec.get("trich") or "")
+            ph_ld = phut_truoc_an(lieu)
+            if ph_hd and ph_ld and ph_ld[1] < ph_hd[0]:
+                out.append(("Cần lưu ý" if ph_ld[1] < ph_hd[0] / 2 else "Tham khảo",
+                            f"Lời dặn uống trước ăn {ph_ld[1]:g} phút, ngắn hơn HDSD (trước ăn {ph_hd[0]:g}" + (f"–{ph_hd[1]:g}" if ph_hd[1] > ph_hd[0] else "") + " phút)",
+                            f"Sửa lời dặn: uống {hd}", can))
+            elif ph_hd and ph_hd[0] >= 30 and not ph_ld:
+                out.append(("Tham khảo", f"Lời dặn 'trước ăn' chưa ghi khoảng cách; HDSD: uống {hd}",
+                            f"Ghi rõ: uống trước ăn {rec.get('phut') or ''}".strip(), can))
     # buổi trong ngày: chỉ xét khi HDSD chỉ định rõ 1 nhóm (sáng) hoặc (tối/trước ngủ)
     SANG, TOI = {"sang"}, {"toi", "truoc_ngu"}
     Hb = B - {"co_dinh"}
