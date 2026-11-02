@@ -1,0 +1,110 @@
+# -*- coding: utf-8 -*-
+"""Lời dặn của bác sĩ và lịch hẹn tái khám: đọc ngày hẹn, đối chiếu số ngày thuốc được cấp, số ngày tối đa được kê, ngày nghỉ.
+Dùng: hen = doc_hen(loi_dan, ngay_ke[, ngay_hen]);  kiem_tra(don, items, cfg, add, any_icd)"""
+import re, datetime, unicodedata
+
+
+def ud(s):
+    s = unicodedata.normalize("NFD", str(s or "")).replace("đ", "d").replace("Đ", "D")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn").lower()
+
+
+def _d(s):
+    if isinstance(s, datetime.datetime): return s.date()
+    if isinstance(s, datetime.date): return s
+    m = re.search(r"(\d{1,2})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{2,4})", str(s or ""))
+    if not m: return None
+    y = int(m.group(3)); y += 2000 if y < 100 else 0
+    try: return datetime.date(y, int(m.group(2)), int(m.group(1)))
+    except ValueError: return None
+
+
+NGHI_CO_DINH = {(1, 1): "Tết Dương lịch", (30, 4): "Ngày Giải phóng miền Nam", (1, 5): "Quốc tế Lao động", (2, 9): "Quốc khánh"}
+DON_VI = {"ngay": 1, "hom": 1, "tuan": 7, "thang": 30}
+_SO = {"mot": 1, "hai": 2, "ba": 3, "bon": 4, "tu": 4, "nam": 5, "sau": 6, "bay": 7, "tam": 8, "chin": 9, "muoi": 10}
+
+
+def doc_hen(loi_dan, ngay_ke, ngay_hen=None):
+    """→ dict(ngay=date|None, so_ngay=int|None, cach='ngày cụ thể'|'sau N ngày'|'khi hết thuốc'|..., trich=str) hoặc None."""
+    nk = _d(ngay_ke)
+    if ngay_hen:
+        h = _d(ngay_hen)
+        if h: return dict(ngay=h, so_ngay=(h - nk).days if nk else None, cach="ngày cụ thể", trich=str(ngay_hen))
+    t = ud(loi_dan)
+    if not t.strip(): return None
+    kw = r"(?:hen\s*)?(?:tai\s*kham|kham\s*lai|hen\s*kham|tai\s*kham\s*lai|kiem\s*tra\s*lai)"
+    m = re.search(kw + r"[^0-9\n]{0,25}?(\d{1,2}\s*[/.-]\s*\d{1,2}(?:\s*[/.-]\s*\d{2,4})?)", t) or re.search(r"\bhen\b[^0-9\n]{0,20}?(\d{1,2}\s*[/.-]\s*\d{1,2}(?:\s*[/.-]\s*\d{2,4})?)", t)
+    if m:
+        s = m.group(1); h = _d(s)
+        if not h and nk:                                  # "hẹn 15/11" không có năm
+            p = re.findall(r"\d+", s)
+            try:
+                h = datetime.date(nk.year, int(p[1]), int(p[0]))
+                if h < nk: h = h.replace(year=nk.year + 1)
+            except (ValueError, IndexError): h = None
+        if h: return dict(ngay=h, so_ngay=(h - nk).days if nk else None, cach="ngày cụ thể", trich=m.group(0))
+    m = re.search(kw + r"\s*(?:sau|trong)?\s*(\d{1,3}|" + "|".join(_SO) + r")\s*(ngay|hom|tuan|thang)", t) \
+        or re.search(r"(?:sau|trong)\s*(\d{1,3}|" + "|".join(_SO) + r")\s*(ngay|hom|tuan|thang)[^.\n]{0,15}" + kw, t)
+    if m:
+        n = int(m.group(1)) if m.group(1).isdigit() else _SO[m.group(1)]
+        sn = n * DON_VI[m.group(2)]
+        return dict(ngay=nk + datetime.timedelta(days=sn) if nk else None, so_ngay=sn, cach=f"sau {n} {m.group(2)}", trich=m.group(0))
+    if re.search(r"(het thuoc|uong het)[^.\n]{0,20}" + kw + "|" + kw + r"[^.\n]{0,15}khi het thuoc", t):
+        return dict(ngay=None, so_ngay=None, cach="khi hết thuốc", trich="khám lại khi hết thuốc")
+    if re.search(kw + r"[^.\n]{0,20}(khi|neu)\s*(co\s*)?(bat thuong|can|dau|sot|khong do|nang)", t):
+        return dict(ngay=None, so_ngay=None, cach="khi có bất thường", trich="khám lại khi có bất thường")
+    return None
+
+
+def kiem_tra(d, items, cfg, add, any_icd):
+    """d: đơn (ngay, loi_dan, ngay_hen, icd_*); items: thuốc đã tính (t, so_ngay, tags). add(...) như trong ra_soat."""
+    loi_dan, ngay_hen = d.get("loi_dan"), d.get("ngay_hen")
+    if not (loi_dan or ngay_hen): return None
+    icds = d["icd_chinh"] + d["icd_kem"]
+    man_tinh = bool(any_icd(icds, cfg.get("icd_man_tinh", "")))
+    gioi_han = int(cfg.get("so_ngay_toi_da_man_tinh", 90) if man_tinh else cfg.get("so_ngay_toi_da_thuong", 30))
+    hen = doc_hen(loi_dan, d.get("ngay"), ngay_hen)
+    ten_all = ", ".join(i["t"]["ten"] for i in items)
+    if not hen:
+        if man_tinh:
+            add(ten_all, "", "Lời dặn – hẹn tái khám", "Đơn có bệnh mạn tính nhưng lời dặn chưa ghi ngày/thời gian hẹn tái khám", "Tham khảo",
+                "Ghi rõ ngày hẹn tái khám (hoặc 'tái khám sau … ngày') để BN không gián đoạn điều trị", "Lời dặn")
+        return None
+    if hen["so_ngay"] is None:
+        if hen["cach"] == "khi hết thuốc" and man_tinh:
+            sn = sorted({round(i["so_ngay"]) for i in items if i.get("so_ngay")})
+            if len(sn) > 1 and sn[-1] - sn[0] > 3:
+                add(ten_all, "", "Lời dặn – hẹn tái khám", f"Hẹn 'khám lại khi hết thuốc' nhưng các thuốc hết vào những ngày khác nhau ({sn[0]}–{sn[-1]} ngày)", "Cần lưu ý",
+                    "Cân đối số lượng các thuốc dùng hằng ngày cho cùng số ngày, ghi ngày hẹn cụ thể", "Lời dặn")
+        return hen
+    N = hen["so_ngay"]
+    ngay_txt = hen["ngay"].strftime("%d/%m/%Y") if hen["ngay"] else ""
+    if N <= 0:
+        add(ten_all, "", "Lời dặn – hẹn tái khám", f"Ngày hẹn tái khám {ngay_txt} không sau ngày kê đơn {d.get('ngay')} – có thể ghi nhầm ngày", "Cần lưu ý",
+            "Kiểm tra lại ngày hẹn", "Lời dặn: " + hen["trich"])
+        return hen
+    if N > gioi_han + 1:
+        add(ten_all, "", "Lời dặn – hẹn tái khám", f"Hẹn tái khám sau {N} ngày ({ngay_txt}) vượt số ngày tối đa được kê một đơn ({gioi_han} ngày{' – bệnh mạn tính' if man_tinh else ''})"
+            + " – BN sẽ không đủ thuốc đến ngày hẹn", "Cần lưu ý", f"Hẹn trong vòng {gioi_han} ngày hoặc cấp đơn mới trước ngày hẹn", "Cau_hinh; TT 26/2025/TT-BYT", "Có")
+    if hen["ngay"]:
+        h = hen["ngay"]; le = NGHI_CO_DINH.get((h.day, h.month))
+        if h.weekday() == 6 or le:
+            add(ten_all, "", "Lời dặn – hẹn tái khám", f"Ngày hẹn {ngay_txt} rơi vào {'Chủ nhật' if h.weekday() == 6 else 'ngày nghỉ ' + le}", "Tham khảo",
+                "Đổi sang ngày làm việc gần nhất (tránh BN đến khi phòng khám nghỉ)", "Lời dặn")
+    thieu, du = [], []
+    for i in items:
+        sn, tags, lieu = i.get("so_ngay"), i.get("tags") or set(), ud(i["t"].get("lieu"))
+        if not sn or re.search(r"khi (sot|dau|can|ho|kho tho)|neu (sot|dau)", lieu): continue
+        if "khang_sinh" in tags or "khang_virus" in tags: continue          # đợt ngắn có chủ ý
+        if sn < N - 1: thieu.append((i["t"]["ten"], sn))
+        elif sn > N + 3: du.append((i["t"]["ten"], sn))
+    if thieu:
+        nang = [x for x in thieu if N - x[1] >= 3]
+        add(", ".join(x[0] for x in thieu), "", "Lời dặn – hẹn tái khám",
+            f"Hẹn tái khám sau {N} ngày ({ngay_txt}) nhưng thuốc chỉ đủ: " + "; ".join(f"{t} {s:g} ngày" for t, s in thieu) + " – BN hết thuốc trước ngày hẹn",
+            "Cần lưu ý" if (nang and man_tinh) else "Tham khảo", f"Tăng số lượng cho đủ {N} ngày hoặc hẹn sớm hơn (nếu chủ ý dùng đợt ngắn thì bỏ qua)", "Lời dặn + số lượng kê")
+    if du:
+        add(", ".join(x[0] for x in du), "", "Lời dặn – hẹn tái khám",
+            f"Thuốc kê dư so với hẹn tái khám {N} ngày: " + "; ".join(f"{t} {s:g} ngày" for t, s in du), "Tham khảo",
+            f"Kê vừa đủ {N} ngày (tránh thừa thuốc, nguy cơ xuất toán phần dư)", "Lời dặn + số lượng kê")
+    return hen

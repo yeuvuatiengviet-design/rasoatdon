@@ -46,7 +46,18 @@ function fixIcd(tok) {
 function parseOcr(text) {
   const lines = text.split(/\n+/).map(s => s.trim()).filter(Boolean);
   const U = lines.map(ud);
-  const out = {tuoi: null, ngay: "", icd_chinh: [], icd_kem: [], chan_doan: "", thuoc: [], khong_ro: []};
+  const out = {tuoi: null, ngay: "", icd_chinh: [], icd_kem: [], chan_doan: "", thuoc: [], khong_ro: [], loi_dan: "", ngay_hen: ""};
+  // lời dặn + hẹn tái khám (thường ở cuối đơn)
+  const ld = [];
+  U.forEach((u, i) => {
+    if (/loi dan|hen (tai )?kham|tai kham|kham lai|hen ngay|ngay hen/.test(u)) {
+      ld.push(lines[i].replace(/^(Lời dặn( của bác sĩ)?|Loi dan)\s*[:.]?\s*/i, ""));
+      if (/loi dan\s*[:.]?\s*$/.test(u) && lines[i + 1]) ld.push(lines[i + 1]);
+    }
+  });
+  out.loi_dan = [...new Set(ld)].join("; ").slice(0, 300);
+  const mh = U.join(" ").match(/(?:hen|tai kham|kham lai)[^0-9]{0,25}(\d{1,2}\s*[\/.-]\s*\d{1,2}\s*[\/.-]\s*\d{2,4})/);
+  if (mh) out.ngay_hen = mh[1].replace(/\s/g, "").replace(/[.-]/g, "/");
   // ngày kê
   for (const u of U) { const m = u.match(/ngay\s*(\d{1,2})\s*thang\s*(\d{1,2})\s*nam\s*(\d{4})/); if (m) out.ngay = `${m[1].padStart(2, "0")}/${m[2].padStart(2, "0")}/${m[3]}`; }
   // tuổi
@@ -106,7 +117,7 @@ function parseOcr(text) {
    Khởi động song song: tải dữ liệu (JSON) ‖ nạp Python (Pyodide) ‖ chuẩn bị bộ đọc chữ (Tesseract).
    Tra cứu thuốc và đọc ảnh dùng được ngay khi dữ liệu tải xong; rà soát chạy khi Python sẵn sàng. */
 const $ = id => document.getElementById(id);
-const PY_FILES = ["ra_soat", "tuong_tac", "dinh_chi", "ghi_chu_ds", "thoi_diem", "chay_app"];
+const PY_FILES = ["ra_soat", "tuong_tac", "dinh_chi", "ghi_chu_ds", "thoi_diem", "tai_kham", "chay_app"];
 const DATA = {quy_tac: "Bang_tra_cuu_ra_soat", danh_muc: "Danh_muc_thong_tin_thuoc", thoi_diem: "Thoi_diem_dung_thuoc", ghi_chu: "Ghi_chu_DS"};
 const BASE = new URL("./", location.href).href;
 let py = null, dmNames = [], dmIdx = [], lastResult = null, lastDon = null, ocrWorker = null, ocrReady = null, D = null;
@@ -171,7 +182,7 @@ function drugRow(t = {}) {
 function fillForm(don, nguon) {
   $("tuoi").value = don.tuoi ?? ""; $("ngay").value = don.ngay || "";
   $("icd1").value = (don.icd_chinh || []).join(", "); $("icd2").value = (don.icd_kem || []).join(", ");
-  $("cdoan").value = don.chan_doan || ""; $("drugs").innerHTML = "";
+  $("cdoan").value = don.chan_doan || ""; $("loidan").value = don.loi_dan || ""; $("ngayhen").value = don.ngay_hen || ""; $("drugs").innerHTML = "";
   (don.thuoc || []).forEach(drugRow); if (!(don.thuoc || []).length) drugRow();
   $("src").textContent = nguon;
 }
@@ -179,7 +190,7 @@ function readForm() {
   const icds = s => (s.toUpperCase().match(/[A-Z]\d{2}(?:\.\d{1,2})?/g) || []);
   const num = s => { const v = parseFloat(String(s).replace(",", ".")); return isNaN(v) ? null : v; };
   return {tuoi: num($("tuoi").value), ngay: $("ngay").value.trim(), icd_chinh: icds($("icd1").value), icd_kem: icds($("icd2").value),
-    chan_doan: $("cdoan").value.trim(),
+    chan_doan: $("cdoan").value.trim(), loi_dan: $("loidan").value.trim(), ngay_hen: $("ngayhen").value.trim(),
     thuoc: [...document.querySelectorAll(".drug")].map(d => ({ten: d.querySelector(".ten").value.trim(), sl: num(d.querySelector(".sl").value),
       dv: d.querySelector(".dv").value.trim(), lieu: d.querySelector(".lieu").value.trim()})).filter(t => t.ten)};
 }
@@ -190,7 +201,7 @@ $("clear").onclick = () => {
   ["sum", "acts", "ctbox"].forEach(id => $(id).hidden = true); $("issues").innerHTML = "";
   $("st").className = "status"; $("st").textContent = "Đơn mới: chụp ảnh hoặc nhập tay ở phần Dữ liệu đơn.";
 };
-fillForm({tuoi: 70, ngay: "15/10/2026", icd_chinh: ["M10"], icd_kem: ["I10", "N18"], chan_doan: "Gút; Tăng huyết áp; Bệnh thận mạn",
+fillForm({tuoi: 70, ngay: "15/10/2026", icd_chinh: ["M10"], icd_kem: ["I10", "N18"], chan_doan: "Gút; Tăng huyết áp; Bệnh thận mạn", loi_dan: "Ăn nhạt, hạn chế thịt đỏ, rượu bia. Hẹn tái khám ngày 29/10/2026",
   thuoc: [{ten: "Colchicina Seid 1mg Tablet", sl: 30, dv: "Viên", lieu: "Sáng 1 viên, tối 1 viên sau ăn"},
           {ten: "Clarithromycin 500mg", sl: 14, dv: "Viên", lieu: "Sáng 1 viên, tối 1 viên"}]}, "· ví dụ minh họa");
 
@@ -244,7 +255,8 @@ function render(r, don) {
   $("c1").textContent = n("Nghiêm trọng"); $("c2").textContent = n("Cần lưu ý"); $("c3").textContent = n("Tham khảo");
   $("sum").hidden = false; $("acts").hidden = false; $("ctbox").hidden = false;
   $("st").className = "status";
-  $("st").textContent = `${don.thuoc.length} thuốc · tuổi ${don.tuoi ?? "?"} · ICD ${[...don.icd_chinh, ...don.icd_kem].join(", ") || "chưa có"} · ${iss.length ? iss.length + " vấn đề" : "không phát hiện vấn đề"}`;
+  const hen = r.hen ? ` · hẹn ${r.hen.ngay ? r.hen.ngay + (r.hen.so_ngay != null ? ` (${r.hen.so_ngay} ngày)` : "") : r.hen.cach}` : "";
+  $("st").textContent = `${don.thuoc.length} thuốc · tuổi ${don.tuoi ?? "?"} · ICD ${[...don.icd_chinh, ...don.icd_kem].join(", ") || "chưa có"}${hen} · ${iss.length ? iss.length + " vấn đề" : "không phát hiện vấn đề"}`;
   const card = i => {
     const m = MUC[i.muc] || 3, cls = ["", "s1", "s2", "s3"][m];
     return `<article class="issue m${m}"><div class="h"><span class="pill ${cls}">${esc(i.muc)}</span><span class="small mut">${esc(i.tieu_chi)}</span>${i.xuat_toan === "Có" ? '<span class="pill s1">Nguy cơ xuất toán</span>' : ""}</div>
@@ -260,6 +272,7 @@ function resultText() {
   if (!lastResult) return "";
   const d = lastDon, L = [`RÀ SOÁT ĐƠN – tuổi ${d.tuoi ?? "?"}; ngày ${d.ngay || "?"}; ICD: ${[...d.icd_chinh, ...d.icd_kem].join(", ")}`];
   d.thuoc.forEach((t, k) => L.push(`${k + 1}. ${t.ten} – ${t.sl ?? ""} ${t.dv} – ${t.lieu}`));
+  if (d.loi_dan || d.ngay_hen) L.push(`Lời dặn: ${[d.loi_dan, d.ngay_hen ? "hẹn " + d.ngay_hen : ""].filter(Boolean).join("; ")}`);
   L.push("");
   lastResult.issues.slice().sort((a, b) => (MUC[a.muc] || 9) - (MUC[b.muc] || 9)).forEach(i => L.push(`[${i.muc}] ${i.tieu_chi} – ${i.thuoc}: ${i.van_de}${i.de_xuat ? " → " + i.de_xuat : ""}`));
   if (!lastResult.issues.length) L.push("Không phát hiện vấn đề theo bộ quy tắc.");

@@ -9,6 +9,7 @@ _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import thoi_diem as TD
 import tuong_tac as TTM
 import dinh_chi as DC
+import tai_kham as TK
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -72,6 +73,8 @@ def doc_bao_cao(path):
     col = lambda *names: next(H[n] for n in names if n in H)
     cMa, cTen, cDv, cSl, cLieu = col("ma duoc pham"), col("ten duoc pham"), col("don vi"), col("so luong"), col("lieu dung")
     cCd, cIcd, cBenh, cKem = col("chan doan"), col("ma icd"), col("ten benh chinh"), col("benh kem theo")
+    opt = lambda *names: next((H[n] for n in H if any(k in n for k in names)), None)
+    cLd, cHen = opt("loi dan"), opt("ngay hen", "hen kham", "tai kham", "ngay tai kham")
     dons, cur = [], None
     for r in rows[hi + 1:]:
         g = lambda j: r[j] if j < len(r) else None
@@ -89,8 +92,12 @@ def doc_bao_cao(path):
             icd_chinh = ICD_RE.findall(str(g(cIcd) or ""))
             icd_kem = [x for x in ICD_RE.findall(str(g(cKem) or "")) if x not in icd_chinh]
             cur = dict(lk=lk, ho_ten=ho_ten, ma_bn=str(g(cMa) or ""), bac_si=bs, ngay=ngay, tuoi=tuoi, chan_doan=str(g(cCd) or ""), icd_chinh=icd_chinh,
-                       icd_kem=icd_kem, ten_benh_kem=str(g(cKem) or ""), thuoc=[])
+                       icd_kem=icd_kem, ten_benh_kem=str(g(cKem) or ""), thuoc=[],
+                       loi_dan=str(g(cLd) or "") if cLd is not None else "", ngay_hen=g(cHen) if cHen is not None else None)
             dons.append(cur)
+        elif cur is not None and not g(cMa) and ((cLd is not None and g(cLd)) or (cHen is not None and g(cHen))):
+            if cLd is not None and g(cLd): cur["loi_dan"] = (cur.get("loi_dan", "") + " " + str(g(cLd))).strip()
+            if cHen is not None and g(cHen): cur["ngay_hen"] = g(cHen)
         elif cur is not None and g(cTen) and g(cMa):
             cur["thuoc"].append(dict(ma=str(g(cMa)), ten=str(g(cTen)).strip(), dv=dv, sl=g(cSl), lieu=str(g(cLieu) or "")))
     return dons
@@ -483,6 +490,9 @@ def ra_soat(dons, dm, Q, bang_td=None):
         if d["tuoi"] is not None and d["tuoi"] < 12 and items:
             add(", ".join(i["t"]["ten"] for i in items), "", "Thiếu dữ liệu – cân nặng", f"BN {d['tuoi']} tuổi, báo cáo không có cân nặng để kiểm tra liều mg/kg",
                 "Tham khảo", "Đối chiếu cân nặng trong bệnh án", "")
+        # --- lời dặn: lịch hẹn tái khám so với số ngày thuốc ---
+        hen = TK.kiem_tra(d, items, cfg, add, any_icd)
+        if hen: d["hen"] = dict(hen, ngay=hen["ngay"].strftime("%d/%m/%Y") if hen.get("ngay") else None)
     issues.sort(key=lambda x: (MUC.get(x["muc"], 9), x["lk"]))
     return issues, chi_tiet
 

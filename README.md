@@ -12,7 +12,8 @@
 **Tab Rà soát đơn**
 1. Bấm **Quét đơn**: đặt cả tờ đơn vừa khung (khung chuyển xanh khi đủ sáng, đủ nét) → bấm nút tròn → kéo 4 chấm cho khớp 4 góc tờ đơn → **Dùng ảnh** → chụp trang tiếp hoặc **Đọc đơn**. (Hoặc **Chọn ảnh** có sẵn.) Kết quả hiện ngay ở đầu trang.
 2. Kiểm tra phần Dữ liệu đơn; sửa chỗ đọc sai – kết quả tự cập nhật. Thuốc khung vàng là chưa khớp danh mục.
-3. "Sao chép" hoặc "Gửi Zalo/tin nhắn" để trao đổi với bác sĩ (không có họ tên BN).
+3. Nhập/kiểm tra **Lời dặn của bác sĩ** (hoặc Ngày hẹn tái khám): app tính số ngày đến hẹn, so với số ngày thuốc được cấp (thiếu/dư thuốc), giới hạn số ngày kê đơn, hẹn rơi vào Chủ nhật/ngày lễ, đơn bệnh mạn tính chưa ghi hẹn.
+4. "Sao chép" hoặc "Gửi Zalo/tin nhắn" để trao đổi với bác sĩ (không có họ tên BN).
 
 **Tab Tra cứu thuốc** – gõ tên thuốc/hoạt chất (hoặc mã ICD để xem thuốc có chỉ định đó): ICD đúng chỉ định, ICD chống chỉ định theo tờ HDSD, giới hạn liều, thời điểm dùng, văn bản thu hồi, chỉ định/CCĐ theo tờ HDSD và các thuốc trong danh mục có tương tác.
 
