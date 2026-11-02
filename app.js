@@ -37,6 +37,9 @@ const RX_SO_DV = /(\d+(?:[.,]\d+)?)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)\b/
 const RX_DUNG = /(uong|ngay|sang|trua|chieu|toi|lan|truoc\W*an|sau\W*an|nho|boi|xit|ngam|tiem|dat|ngu|\b\d{1,2}\s*h\b|\bvien\b)/;
 /* sửa lỗi OCR hay gặp trong dòng cách dùng: "Í/Ì/l viên" → "1 viên", "79h" → "19h", "ung/nong" → "uống", "sau an" → "sau ăn" */
 function suaLieu(s) {
+  s = s.replace(/½/g, " 1/2").replace(/¼/g, " 1/4").replace(/¾/g, " 3/4").replace(/[⁄∕]/g, "/")
+    .replace(/(^|[\s(])[lIÍÌ|!](?=\s*\/\s*[234]\b)/g, "$11")                 // "l/2" → "1/2"
+    .replace(/(\d)\s*\/\s*([234])(?=\s*(v|viên|vien|gói|goi|ống|ong|\b))/gi, "$1/$2");   // "1 / 2 viên" → "1/2 viên"
   return s.replace(/(^|\s)[ÍÌIïîl|!](?=\s*(viên|viện|vien|gói|goi|ống|ong|lần|lan)\b)/gi, "$11")
     .replace(/\b([2-9])(\d)\s*h\b/g, (m, a, b) => (+(a + b) > 24 ? "1" + b : a + b) + "h")
     .replace(/(\d{1,2}h\s+)[uưn]?[ôoốóòơ]{0,2}ng\b/gi, "$1uống").replace(/\b(?:uong|uông|uóng|nóng|nong)\b/gi, "uống")
