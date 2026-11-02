@@ -34,9 +34,17 @@ function matchDrug(line) {
 }
 const DV = {vien: "Viên", goi: "Gói", ong: "Ống", chai: "Chai", lo: "Lọ", tuyp: "Tuýp", hop: "Hộp", but: "Bút", tui: "Túi", vi: "Vỉ"};
 const RX_SO_DV = /(\d+(?:[.,]\d+)?)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)\b/g;
-const RX_DUNG = /(uong|ngay|sang|trua|chieu|toi|lan|truoc\W*an|sau\W*an|nho|boi|xit|ngam|tiem|dat|ngu|\b\d{1,2}\s*h\b|\bvien\b)/;
+const RX_DUNG = /(uong|ngay|sang|trua|chieu|toi|lan|truoc\W*an|sau\W*an|nho|boi|xit|ngam|tiem|dat|ngu|\b\d{1,2}\s*h\b|\bvien\b|\d\s*(dv|ui|iu|don vi)\b)/;
 /* sửa lỗi OCR hay gặp trong dòng cách dùng: "Í/Ì/l viên" → "1 viên", "79h" → "19h", "ung/nong" → "uống", "sau an" → "sau ăn" */
 function suaLieu(s) {
+  s = s
+    // số bị đọc lẫn chữ: l0 → 10, O8 → 08, 1O → 10, 1S → 15 (chỉ khi dính liền chữ số)
+    .replace(/(^|[\sx(:,;-])[lI|](?=\d)/g, "$11").replace(/(\d)[lI|](?=\d|\s*(đv|dv|UI|IU|viên|ml|mg)\b)/gi, "$11")
+    .replace(/(^|[\sx(:,;-])[oO](?=\d)/g, "$10").replace(/(\d)[oO](?=\d|\b)/g, "$10").replace(/(\d)[S](?=\d|\s*(đv|dv|UI|viên)\b)/g, "$15")
+    // đơn vị insulin: UI = IU = U = đv = đơn vị (OCR: Ul, lU, U1, dv, đy, ðv, d.v)
+    .replace(/(\d)\s*(?:U[Il1lJ|]|[Il1l|]U|IU|UI)(?![A-Za-zÀ-ỹ])/g, "$1 UI").replace(/(\d)\s*[đdðĐD]\s*\.?\s*[vVyYựư](?![A-Za-zÀ-ỹ])/g, "$1 đv")
+    .replace(/(\d)\s*[đdĐD][oơóô]n\s*v[iịíì](?![A-Za-zÀ-ỹ])/gi, "$1 đơn vị")
+    .replace(/(\d)\s*m[Il1|](?![A-Za-zÀ-ỹ])/g, "$1ml").replace(/(\d)\s*rng(?![A-Za-zÀ-ỹ])/g, "$1mg");
   s = s.replace(/½/g, " 1/2").replace(/¼/g, " 1/4").replace(/¾/g, " 3/4").replace(/[⁄∕]/g, "/")
     .replace(/(^|[\s(])[lIÍÌ|!](?=\s*\/\s*[234]\b)/g, "$11")                 // "l/2" → "1/2"
     .replace(/(\d)\s*\/\s*([234])(?=\s*(v|viên|vien|gói|goi|ống|ong|\b))/gi, "$1/$2");   // "1 / 2 viên" → "1/2 viên"
@@ -51,7 +59,7 @@ function fixIcd(tok) {
   let t = tok.toUpperCase();
   if (/^[1L|][0-9O]{2}(?:[.,][0-9O]{1,2})?$/.test(t)) t = "I" + t.slice(1);   // OCR hay đọc chữ I thành số 1 (I10 → 110)
   if (!/^[A-Z]/.test(t)) return null;
-  const rest = t.slice(1).replace(/[OQD]/g, "0").replace(/[IL|]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/,/g, ".");
+  const rest = t.slice(1).replace(/[OQD]/g, "0").replace(/[IL|]/g, "1").replace(/S/g, "5").replace(/B/g, "8").replace(/Z/g, "2").replace(/G/g, "6").replace(/A/g, "4").replace(/T/g, "7").replace(/,/g, ".");
   const m = (t[0] + rest).match(/^[A-Z]\d{2}(?:\.\d{1,2})?$/); return m ? m[0] : null;
 }
 /* Dòng thuốc kiểu HIS: "Hoạt chất (Biệt dược) - hàm lượng  SL  Đơn vị" → khớp danh mục theo biệt dược trước */
@@ -152,6 +160,15 @@ function hienTenIcd() {                                               // tên ch
 }
 const tenIcd = codes => CD ? codes.map(c => CD.icd[c] || CD.icd[c.slice(0, 3)]).filter(Boolean) : [];
 
+/* mã ICD đọc ra không có trong bảng mã BV dùng → thử thay ký tự dễ nhầm (0/O/D, 1/I/7, 5/S, 8/B, 2/Z, 6/G, 4/A) */
+const NHAM = {"0": "8D", "1": "7I", "7": "1", "5": "6S3", "6": "58", "8": "036B", "3": "85", "2": "7Z", "4": "1A", "9": "0", "O": "0Q", "D": "0O", "I": "1T", "S": "5", "B": "8E", "E": "F", "F": "E"};
+function kiemIcd(c) {
+  if (!c || !CD) return c;
+  const co = x => CD.icd[x] || (x.length === 3 && Object.keys(CD.icd).some(k => k.startsWith(x)));
+  if (co(c) || co(c.slice(0, 3))) return c;
+  for (let i = 0; i < c.length; i++) for (const r of NHAM[c[i]] || "") { const x = c.slice(0, i) + r + c.slice(i + 1); if (/^[A-Z]\d{2}(\.\d{1,2})?$/.test(x) && co(x)) return x; }
+  return c;
+}
 function parseOcr(text) {
   const lines = text.split(/\n+/).map(s => s.replace(/[|¦]/g, " ").replace(/\s{2,}/g, " ").trim()).filter(Boolean);   // bỏ kẻ bảng
   const U = lines.map(ud);
@@ -196,7 +213,7 @@ function parseOcr(text) {
     if (!inCd) continue;
     const isMa = /^\W*(ma\s*)?\W?[il1|]?cd\b/.test(u);
     if (!isMa) cd.push(lines[i].replace(/^.{0,4}h[aâ]n\s*đo[aá]n\s*[:.]?/i, "").replace(/^(Chẩn đoán|Chan doan)\s*[:.]?/i, "").trim());
-    for (const tok of (isMa ? lines[i].replace(/^.*?[CС]D\s*-?\s*1?0?\s*[:.;]?/i, " ") : lines[i]).split(/[\s;:()\[\],-]+/)) { const c = fixIcd(tok.replace(/\.$/, "")); if (c && !out.icd_chinh.includes(c) && !out.icd_kem.includes(c)) (out.icd_chinh.length ? out.icd_kem : out.icd_chinh).push(c); }
+    for (const tok of (isMa ? lines[i].replace(/^.*?[CС]D\s*-?\s*1?0?\s*[:.;]?/i, " ") : lines[i]).split(/[\s;:()\[\],-]+/)) { const c = kiemIcd(fixIcd(tok.replace(/\.$/, ""))); if (c && !out.icd_chinh.includes(c) && !out.icd_kem.includes(c)) (out.icd_chinh.length ? out.icd_kem : out.icd_chinh).push(c); }
   }
   out.chan_doan = suaChu(cd.join(" ")).replace(/\(\s*\)/g, "").replace(/\b[A-Z1l][0-9OIl]{2}(?:\.\d{1,2})?\b\s*[-–:]?\s*/g, "").replace(/\s{2,}/g, " ").trim().slice(0, 300);
   if (out.chan_doan.replace(/[^A-Za-zÀ-ỹ]/g, "").length < 6) out.chan_doan = tenIcd([...out.icd_chinh, ...out.icd_kem]).join("; ");   // không đọc được chữ → lấy tên ICD chuẩn
@@ -373,14 +390,22 @@ function runReview() {
     const r = JSON.parse(py.runPython("chay_app.ra_soat_don(DON)")); lastResult = r; render(r, don);
   } catch (e) { $("st").className = "status err"; $("st").textContent = "Lỗi khi rà soát: " + (e.message || e); }
 }
+function danhDauSl(r) {                                            // SL đọc từ ảnh lệch nhiều so với ngày hẹn → khung vàng để DS kiểm tra lại
+  const N = r.hen && r.hen.so_ngay, rows = [...document.querySelectorAll(".drug")];
+  rows.forEach(d => d.querySelector(".sl").classList.remove("nghi"));
+  if (!N || !/ảnh/.test($("src").textContent)) return [];
+  const nghi = [];
+  r.chi_tiet.forEach((c, k) => { if (c.so_ngay && Math.abs(c.so_ngay - N) > Math.max(4, N * 0.35) && rows[k]) { rows[k].querySelector(".sl").classList.add("nghi"); nghi.push(c.thuoc); } });
+  return nghi;
+}
 function render(r, don) {
   const iss = r.issues.slice().sort((a, b) => (MUC[a.muc] || 9) - (MUC[b.muc] || 9));
   const n = m => iss.filter(i => i.muc === m).length;
   $("c1").textContent = n("Nghiêm trọng"); $("c2").textContent = n("Cần lưu ý"); $("c3").textContent = n("Tham khảo");
   $("sum").hidden = false; $("acts").hidden = false; $("ctbox").hidden = false;
-  $("st").className = "status";
+  $("st").className = "status"; const nghiSl = danhDauSl(r);
   const hen = r.hen ? ` · hẹn ${r.hen.ngay ? r.hen.ngay + (r.hen.so_ngay != null ? ` (${r.hen.so_ngay} ngày)` : "") : r.hen.cach}` : "";
-  $("st").textContent = `${don.thuoc.length} thuốc · tuổi ${don.tuoi ?? "?"} · ICD ${[...don.icd_chinh, ...don.icd_kem].join(", ") || "chưa có"}${hen} · ${iss.length ? iss.length + " vấn đề" : "không phát hiện vấn đề"}`;
+  $("st").textContent = `${don.thuoc.length} thuốc · tuổi ${don.tuoi ?? "?"} · ICD ${[...don.icd_chinh, ...don.icd_kem].join(", ") || "chưa có"}${hen} · ${iss.length ? iss.length + " vấn đề" : "không phát hiện vấn đề"}${nghiSl.length ? " · Kiểm tra lại số lượng đọc từ ảnh (khung vàng): " + nghiSl.join(", ") : ""}`;
   const card = i => {
     const m = MUC[i.muc] || 3, cls = ["", "s1", "s2", "s3"][m];
     return `<article class="issue m${m}"><div class="h"><span class="pill ${cls}">${esc(i.muc)}</span><span class="small mut">${esc(i.tieu_chi)}</span>${i.xuat_toan === "Có" ? '<span class="pill s1">Nguy cơ xuất toán</span>' : ""}</div>
@@ -389,7 +414,7 @@ function render(r, don) {
   };
   const chinh = iss.filter(i => i.muc !== "Tham khảo"), tk = iss.filter(i => i.muc === "Tham khảo");
   $("issues").innerHTML = chinh.map(card).join("") + (tk.length ? `<details class="more"${chinh.length ? "" : " open"}><summary>${tk.length} mục Tham khảo</summary><div style="display:grid;gap:8px">${tk.map(card).join("")}</div></details>` : "");
-  $("ct").innerHTML = r.chi_tiet.map(c => `<tr><td><button class="link" type="button" data-thuoc="${esc(c.thuoc)}">${esc(c.thuoc)}</button></td><td>${esc(c.hoat_chat)}</td><td class="n">${c.dv_ngay ?? "–"}</td><td class="n">${c.so_ngay ?? "–"}</td>
+  $("ct").innerHTML = r.chi_tiet.map(c => `<tr><td><button class="link" type="button" data-thuoc="${esc(c.thuoc)}">${esc(c.thuoc)}</button></td><td>${esc(c.hoat_chat)}</td><td class="n">${c.dv_ngay != null ? c.dv_ngay + " " + String(c.don_vi || "").toLowerCase() : c.ui_ngay ? c.ui_ngay + " UI" : "–"}</td><td class="n">${c.so_ngay ?? "–"}</td>
     <td>${esc(c.phu_hop_icd)}</td><td>${esc(c.can_cu_icd)}</td><td>${esc(c.danh_muc)}</td></tr>`).join("");
 }
 function resultText() {
@@ -470,11 +495,17 @@ function showHits() {
 }
 $("q").addEventListener("input", debounce(showHits, 120));
 $("hits").addEventListener("click", e => { const b = e.target.closest(".hit"); if (b) showInfo(D.dm[+b.dataset.i]); });
+function donViDem(d) {
+  const t = ud([d.dang, d.ten, d.hl].join(" "));
+  return /but|pen\b/.test(t) ? "bút" : /\bgoi\b|cốm|bot pha|hon dich uong/.test(t) ? "gói" : /\bong\b|tiem/.test(t) ? "ống" : /\blo\b|nho mat|nho mui/.test(t) ? "lọ"
+    : /tuyp|kem|gel|mo\b/.test(t) ? "tuýp" : /\bchai\b|siro|xit/.test(t) ? "chai" : /vien|nang/.test(t) ? "viên" : "viên/gói/ống";
+}
 function showInfo(d) {
   const hd = d.hd || {}, row = (k, v, cls) => v != null && v !== "" ? `<dt>${k}</dt><dd${cls ? ` class="${cls}"` : ""}>${esc(v)}</dd>` : "";
   const uniq = a => [...new Set(a.flatMap(x => String(x || "").split(",")).map(x => x.trim()).filter(Boolean))].join(", ");
-  const lieu = [hd.max_dv_ngay_nguoi_lon != null ? `Tối đa ${hd.max_dv_ngay_nguoi_lon} đv/ngày (người lớn)` : "", hd.max_dv_ngay_tre_em != null ? `trẻ em tối đa ${hd.max_dv_ngay_tre_em} đv/ngày` : "",
-    hd.min_dv_ngay_nguoi_lon != null ? `tối thiểu ${hd.min_dv_ngay_nguoi_lon} đv/ngày` : "", hd.max_dv_ngay_theo_icd ? `tối đa theo ICD: ${hd.max_dv_ngay_theo_icd}` : "", hd.min_dv_ngay_theo_icd ? `tối thiểu theo ICD: ${hd.min_dv_ngay_theo_icd}` : ""].filter(Boolean).join("; ");
+  const dvd = donViDem(d);                                            // viên/gói/ống… (không viết "đv" để khỏi nhầm với đơn vị insulin UI)
+  const lieu = [hd.max_dv_ngay_nguoi_lon != null ? `Tối đa ${hd.max_dv_ngay_nguoi_lon} ${dvd}/ngày (người lớn)` : "", hd.max_dv_ngay_tre_em != null ? `trẻ em tối đa ${hd.max_dv_ngay_tre_em} ${dvd}/ngày` : "",
+    hd.min_dv_ngay_nguoi_lon != null ? `tối thiểu ${hd.min_dv_ngay_nguoi_lon} ${dvd}/ngày` : "", hd.max_dv_ngay_theo_icd ? `tối đa theo ICD: ${hd.max_dv_ngay_theo_icd}` : "", hd.min_dv_ngay_theo_icd ? `tối thiểu theo ICD: ${hd.min_dv_ngay_theo_icd}` : ""].filter(Boolean).join("; ");
   const tdv = d.td ? [d.td[4], d.td[5], d.td[6] ? "trước ăn " + d.td[6] : ""].filter(x => x && x !== "Không nêu").join("; ") : "";
   const ccd = uniq([hd.icd_ccd, ...d.qt.map(r => r.icd_ccd_tuyet_doi)]), kt = uniq([hd.icd_ccd_kiem_tra]), thtr = uniq(d.qt.map(r => r.icd_than_trong));
   const items = [];

@@ -23,6 +23,6 @@ def ra_soat_don(don_json):
     issues, ct = R.ra_soat([don], c["dm"], c["Q"], c["td"])
     G.ap_dung(issues, ct, DL + "Ghi_chu_DS.xlsx")
     keep_i = ("muc", "tieu_chi", "thuoc", "hoat_chat", "van_de", "de_xuat", "can_cu", "nhan_xet", "xuat_toan", "muc_tt", "qd5948")
-    keep_c = ("thuoc", "hoat_chat", "ham_luong", "so_luong", "don_vi", "cach_dung", "dv_ngay", "so_ngay", "phu_hop_icd", "can_cu_icd", "danh_muc", "thoi_diem_hdsd", "nguon_hdsd")
+    keep_c = ("thuoc", "hoat_chat", "ham_luong", "so_luong", "don_vi", "cach_dung", "dv_ngay", "ui_ngay", "so_ngay", "phu_hop_icd", "can_cu_icd", "danh_muc", "thoi_diem_hdsd", "nguon_hdsd")
     return json.dumps(dict(hen=don.get("hen"), issues=[{k: i.get(k) for k in keep_i} for i in issues], chi_tiet=[{k: x.get(k) for k in keep_c} for x in ct]),
                       ensure_ascii=False, default=str)

@@ -48,7 +48,7 @@
     </div>
     <div id="issues" style="display:grid;gap:8px"></div>
     <details class="more" id="ctbox" hidden><summary>Chi tiết từng thuốc</summary>
-      <div class="wrap"><table><thead><tr><th>Thuốc</th><th>Hoạt chất</th><th>ĐV/ngày</th><th>Số ngày</th><th>ICD theo HDSD</th><th>Căn cứ</th><th>Danh mục</th></tr></thead><tbody id="ct"></tbody></table></div>
+      <div class="wrap"><table><thead><tr><th>Thuốc</th><th>Hoạt chất</th><th>Liều/ngày</th><th>Số ngày</th><th>ICD theo HDSD</th><th>Căn cứ</th><th>Danh mục</th></tr></thead><tbody id="ct"></tbody></table></div>
     </details>
     <div class="row" id="acts" hidden>
       <button id="copy" type="button" style="flex:1">Sao chép</button>
@@ -113,7 +113,7 @@
     <span class="hdl" id="h0"></span><span class="hdl" id="h1"></span><span class="hdl" id="h2"></span><span class="hdl" id="h3"></span></div>
   <div class="cropbot"><button type="button" class="ovbtn" id="cropRetake">Chụp lại</button><button type="button" class="ovbtn" id="cropRotate">Xoay ⟳</button><button type="button" class="ovbtn" id="cropFull">Cả ảnh</button><button type="button" class="ovbtn primary" id="cropOk">Dùng ảnh</button></div>
 </div>
-<div class="ov more" id="more" hidden><div class="morebox"><p id="moreTxt"></p><div class="row"><button type="button" id="moreYes" style="flex:1">Chụp trang tiếp</button><button type="button" class="primary" id="moreNo" style="flex:1">Đọc đơn</button></div></div></div>
+<div class="ov ovmore" id="more" hidden><div class="morebox"><p id="moreTxt"></p><div class="row"><button type="button" id="moreYes" style="flex:1">Chụp trang tiếp</button><button type="button" class="primary" id="moreNo" style="flex:1">Đọc đơn</button></div></div></div>
 <datalist id="dmlist"></datalist>
 <datalist id="dvlist"><option value="Viên"></option><option value="Gói"></option><option value="Ống"></option><option value="Chai"></option><option value="Lọ"></option><option value="Tuýp"></option><option value="Bút"></option><option value="Túi"></option></datalist>
 <script src="vendor/tesseract/tesseract.min.js" defer></script>

@@ -217,6 +217,26 @@ def phan_so(lieu):
     t = re.sub(r"\b(nua|1/2 cua)\s+(vien|goi|ong|v\b)", r"0.5 \2", t)   # nửa viên -> 0.5 viên
     return t
 
+RX_UI = r"(?:ui|iu|u|dv|d\.v|don vi|unit)\b"           # đơn vị insulin: UI = IU = U = đv = đơn vị
+def ui_ngay(lieu):
+    """Tổng số đơn vị (UI/đv) mỗi ngày từ lời dặn tiêm insulin: "7h tiêm 16 đv, 17h tiêm 12 đv" → 28; "x16 ĐV" → 16."""
+    t = phan_so(lieu)
+    if re.search(r"khi (sot|dau|can)|theo (duong huyet|dh)|neu duong huyet", t): return None
+    vals = [float(x) for x in re.findall(r"(?<![\d/.])x?\s*(\d+(?:\.\d+)?)\s*" + RX_UI, t)]
+    if not vals: return None
+    m = re.search(r"(\d+)\s*lan\s*(?:/\s*)?(?:ngay|moi ngay)?", t)
+    if len(vals) == 1 and m and 1 < int(m.group(1)) <= 4 and re.search(r"moi lan|/\s*lan|x\s*\d+\s*lan", t): return vals[0] * int(m.group(1))
+    return sum(vals)
+
+def ui_moi_don_vi(hl):
+    """Số UI trong 1 bút/lọ/ống theo hàm lượng danh mục: "100 U/ml (300 U/3ml)" → 300; "100IU/ml x 10ml" → 1000."""
+    t = ud(hl).replace(",", ".")
+    c = re.search(r"(\d+(?:\.\d+)?)\s*(?:iu|ui|u|don vi)\s*/\s*ml", t)
+    v = [float(x) for x in re.findall(r"(?<![\d/])(\d+(?:\.\d+)?)\s*ml\b", t)]
+    if c and v: return float(c.group(1)) * max(v)
+    m = re.search(r"(\d{3,4})\s*(?:iu|ui|u|don vi)\b(?!\s*/\s*ml)", t)
+    return float(m.group(1)) if m else None
+
 def don_vi_ngay(lieu, dv):
     t = phan_so(lieu)
     if re.search(r"khi (sot|dau|can|ho|kho tho)|neu (sot|dau)", t): return None, "dùng khi cần"
@@ -402,6 +422,17 @@ def ra_soat(dons, dm, Q, bang_td=None):
             try:
                 if dvn: so_ngay = round(float(t["sl"]) / dvn, 1)
             except Exception: pass
+            ui_n = ui_ngay(t["lieu"]) if dvn is None else None             # insulin: số ngày = SL × UI/bút(lọ) ÷ UI/ngày
+            if ui_n:
+                per = ui_moi_don_vi((info or {}).get("hl"))
+                if not per:                                            # bút/ống 3 ml (100 UI/ml) = 300 UI; lọ 10 ml theo nồng độ
+                    k = ud(t["dv"]) + " " + ud(t["ten"])
+                    c = re.search(r"(\d+)\s*(?:iu|ui|u|don vi)\s*/\s*ml", ud((info or {}).get("hl")) + " " + ud(t["ten"]))
+                    if re.search(r"\bbut\b|pen\b|kwikpen|flexpen|flextouch|3\s*ml|\bong\b", k): per = 3 * (float(c.group(1)) if c else 100)
+                    elif re.search(r"\blo\b", k) and c: per = 10 * float(c.group(1))
+                try:
+                    if per and t["sl"]: so_ngay = round(float(t["sl"]) * per / ui_n, 1)
+                except Exception: pass
             mg = mg_moi_don_vi((info or {}).get("hl")) if info else None
             mg_ngay = round(mg * dvn, 3) if (mg and dvn) else None
             vuot_mg = False
@@ -447,7 +478,7 @@ def ra_soat(dons, dm, Q, bang_td=None):
                     add(t["ten"], hc, "Thời điểm dùng", vd_td + f" (lời dặn: '{t['lieu']}')" + ng_td, muc_td, dx_td,
                         ("DS hiệu chỉnh – " if rec_td["ds"] else "") + cc_td, "", muc_icd)
             chi_tiet.append(dict(base, thuoc=t["ten"], thoi_diem_hdsd=td_hdsd, hoat_chat=hc, ham_luong=(info or {}).get("hl"), so_luong=t["sl"], don_vi=t["dv"],
-                                 cach_dung=t["lieu"], dv_ngay=dvn, so_ngay=so_ngay, mg_ngay=mg_ngay, phu_hop_icd=muc_icd,
+                                 cach_dung=t["lieu"], dv_ngay=dvn, ui_ngay=ui_n, so_ngay=so_ngay, mg_ngay=mg_ngay, phu_hop_icd=muc_icd,
                                  can_cu_icd=ly_do, nhom=", ".join(sorted(items[-1]["tags"])), danh_muc=kq_dm,
                                  trang_thai_qt=tt_qt, nguon_hdsd=nguon_hdsd(info), link_hdsd=(info or {}).get("link"),
                                  ghi_chu_dm=str((info or {}).get("gc") or "")[:300]))
@@ -621,7 +652,7 @@ def xuat(issues, chi_tiet, dons, out, de_xuat=None, co_ten=False, dinh_chi=None)
     ghi_sheet(wb, "Chi tiết thuốc", [
         ("lk", "Mã LK", 16)] + TEN + [("tuoi", "Tuổi", 6), ("bac_si", "Bác sĩ", 18), ("icd_chinh", "ICD chính", 9), ("icd_kem", "ICD kèm", 18),
         ("thuoc", "Thuốc", 26), ("hoat_chat", "Hoạt chất", 24), ("ham_luong", "Hàm lượng", 12), ("so_luong", "SL", 6), ("don_vi", "ĐV", 7),
-        ("cach_dung", "Cách dùng", 30), ("thoi_diem_hdsd", "Thời điểm dùng theo HDSD", 24), ("dv_ngay", "ĐV/ngày", 8), ("so_ngay", "Số ngày", 8), ("mg_ngay", "mg/ngày", 9),
+        ("cach_dung", "Cách dùng", 30), ("thoi_diem_hdsd", "Thời điểm dùng theo HDSD", 24), ("dv_ngay", "SL/ngày (viên, gói, ống…)", 10), ("ui_ngay", "UI (đv)/ngày – insulin", 10), ("so_ngay", "Số ngày", 8), ("mg_ngay", "mg/ngày", 9),
         ("phu_hop_icd", "Mức phù hợp ICD", 15), ("can_cu_icd", "ICD căn cứ", 24), ("nhom", "Nhóm", 22), ("danh_muc", "Khớp danh mục", 14),
         ("nguon_hdsd", "Nguồn HDSD trong danh mục", 22), ("link_hdsd", "Link tờ HDSD", 30), ("ghi_chu_dm", "Ghi chú đối chiếu (DM)", 40)],
         chi_tiet, "phu_hop_icd")

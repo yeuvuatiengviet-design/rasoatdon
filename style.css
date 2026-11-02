@@ -134,6 +134,9 @@ body.noscroll{overflow:hidden}
 .hdl{position:absolute;width:34px;height:34px;margin:-17px 0 0 -17px;border-radius:50%;background:rgba(79,224,138,.35);border:3px solid #4fe08a;touch-action:none;cursor:grab}
 .hdl::after{content:"";position:absolute;inset:-14px;border-radius:50%}
 .cropbot{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:10px 12px calc(12px + env(safe-area-inset-bottom))}
-.more{background:rgba(0,0,0,.6);display:grid;place-items:center;padding:16px}
+.ov.ovmore{background:rgba(0,0,0,.6);display:grid;place-items:center;padding:16px}
 .morebox{background:var(--surface);color:var(--fg);border-radius:14px;padding:16px;display:grid;gap:12px;width:min(420px,100%)}
 .morebox p{margin:0;font-weight:600}
+/* bảng rộng chỉ cuộn trong khung, không kéo giãn cả trang */
+.card>*,details.more,details.more>*,#pane-rs,#pane-tc,main{min-width:0}.wrap{max-width:100%}
+.sl.nghi{border-color:var(--warn);background:var(--warn-bg);box-shadow:0 0 0 2px var(--warn-bg)}
