@@ -153,6 +153,7 @@
       gray[y * W + x] = L;
     }
     phangNen(gray, W, H);
+    lamNet(gray, W, H);
     const hist = new Uint32Array(256); gray.forEach(v => hist[v]++);   // kéo giãn tương phản (bỏ 1% hai đầu)
     let acc = 0; for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc > W * H * 0.01) { lo = i; break; } }
     acc = 0; for (let i = 255; i >= 0; i--) { acc += hist[i]; if (acc > W * H * 0.01) { hi = i; break; } }
@@ -160,6 +161,32 @@
     for (let i = 0; i < W * H; i++) { const v = Math.max(0, Math.min(255, (gray[i] - lo) * k)); o[i * 4] = o[i * 4 + 1] = o[i * 4 + 2] = v; o[i * 4 + 3] = 255; }
     g.putImageData(od, 0, 0);
     return out;
+  }
+  /* làm nét khi ảnh mờ (ảnh nhỏ/nén qua Zalo rồi phóng lên 2000px): đo độ dốc biên chữ so với tương phản;
+     dưới 0,2 thì unsharp mask (trừ ảnh mờ hộp 3 lần r=2, hệ số 2,2). Thử 40 đơn mô phỏng ảnh mờ: đọc đúng liều 76% → 97%;
+     ảnh đủ nét thì không động vào (làm nét ảnh nét lại giảm độ đúng) */
+  function lamNet(g, W, H) {
+    const hg = new Uint32Array(256), hv = new Uint32Array(256);
+    for (let y = 0; y < H; y++) { const r = y * W; for (let x = 0; x < W - 1; x++) hg[Math.abs(g[r + x + 1] - g[r + x])]++; }
+    for (let i = 0; i < W * H; i++) hv[g[i]]++;
+    const pct = (h, n, p) => { let a = 0; for (let i = 0; i < 256; i++) { a += h[i]; if (a >= n * p) return i; } return 255; };
+    const m = pct(hg, H * (W - 1), 0.995) / Math.max(1, pct(hv, W * H, 0.95) - pct(hv, W * H, 0.01));
+    if (m >= 0.2) return;
+    const r = 2, k = 2 * r + 1;
+    let b = Float32Array.from(g), t = new Float32Array(W * H);
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < H; y++) {                                   // ngang (mép: lặp điểm biên)
+        const o = y * W; let s = 0;
+        for (let x = -r; x <= r; x++) s += b[o + Math.min(W - 1, Math.max(0, x))];
+        for (let x = 0; x < W; x++) { t[o + x] = s / k; s += b[o + Math.min(W - 1, x + r + 1)] - b[o + Math.max(0, x - r)]; }
+      }
+      for (let x = 0; x < W; x++) {                                   // dọc
+        let s = 0;
+        for (let y = -r; y <= r; y++) s += t[Math.min(H - 1, Math.max(0, y)) * W + x];
+        for (let y = 0; y < H; y++) { b[y * W + x] = s / k; s += t[Math.min(H - 1, y + r + 1) * W + x] - t[Math.max(0, y - r) * W + x]; }
+      }
+    }
+    for (let i = 0; i < W * H; i++) { const d = g[i] - b[i]; if (Math.abs(d) > 2) g[i] = g[i] + 2.2 * d; }   // Uint8Clamped tự kẹp 0–255
   }
   /* chia cho nền mờ: khử bóng/sáng không đều khi chụp bằng điện thoại */
   function phangNen(g, W, H) {

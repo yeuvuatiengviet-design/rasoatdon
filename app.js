@@ -34,24 +34,50 @@ function matchDrug(line) {
 }
 const DV = {vien: "Viên", goi: "Gói", ong: "Ống", chai: "Chai", lo: "Lọ", tuyp: "Tuýp", hop: "Hộp", but: "Bút", tui: "Túi", vi: "Vỉ"};
 const RX_SO_DV = /(\d+(?:[.,]\d+)?)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)\b/g;
-const RX_DUNG = /(uong|ngay|sang|trua|chieu|toi|lan|truoc\W*an|sau\W*an|nho|boi|xit|ngam|tiem|dat|ngu|\b\d{1,2}\s*h\b|\bvien\b|\d\s*(dv|ui|iu|don vi)\b)/;
+const RX_DUNG = /(uong|ngay|sang|trua|chieu|toi|lan|truoc\W*an|sau\W*an|nho|boi|xit|ngam|tiem|dat|ngu|\b\d{1,2}\s*h\b|\bvien\b|\d\s*(dv|ui|iu|don vi|v)\b|\b(pha|hit|xoa|thoa|tra|chia|nhai|suc|phut|sot|bom|xong)\b)/;
+/* Đầu dòng cách dùng hay dính vạch kẻ ô / STT: "|7h" → "17h", "l sáng" → "lsáng", "hối" → "tối".
+   So tần suất từ mở đầu cách dùng trong HIS 9 tháng để quyết định có bỏ ký tự đầu không. */
+const DAU = {sang: 50000, "7h": 41520, uong: 39541, "19h": 18104, toi: 14814, ngay: 12264, tra: 6393, xit: 2677, nho: 2145, boi: 1504, xoa: 649, "21h": 514,
+  sot: 453, thoa: 441, pha: 441, dat: 434, tiem: 425, hit: 377, "11h": 350, "6h": 286, "20h": 252, trua: 190, "17h": 142, chieu: 102, "16h": 19, "9h": 7, "8h": 6, "1h": 1};
+function boDauKe(s) {
+  const tk = x => { const m = ud(x).replace(/^z(?=\s*h)/, "7").match(/^\s*(\d{1,2}\s*h|[a-z]+)/); return m ? m[1].replace(/\s/g, "") : ""; };
+  const f = x => DAU[tk(x)] || 0;
+  const m = s.match(/^\s*[1lIÌÍịỊ|\[\]!]\s?(?=\S)/), cand = [];
+  if (m) { const rem = s.slice(m[0].length); cand.push(rem, "t" + rem, "t" + rem.slice(1)); }
+  if (/^\s*[hlr]/.test(s)) cand.push("t" + s.trim().slice(1));
+  for (const c of cand) if (f(c) > 20 * f(s) + 50) return tk(c) === "toi" ? c.replace(/^\s*\S*?[oòóỏõọôồốổỗộơờớởỡợ][iíìỉĩị]/i, "tối") : c;
+  return s;
+}
 /* sửa lỗi OCR hay gặp trong dòng cách dùng: "Í/Ì/l viên" → "1 viên", "79h" → "19h", "ung/nong" → "uống", "sau an" → "sau ăn" */
 function suaLieu(s) {
   s = s
     // số bị đọc lẫn chữ: l0 → 10, O8 → 08, 1O → 10, 1S → 15 (chỉ khi dính liền chữ số)
-    .replace(/(^|[\sx(:,;-])[lI|](?=\d)/g, "$11").replace(/(\d)[lI|](?=\d|\s*(đv|dv|UI|IU|viên|ml|mg)\b)/gi, "$11")
+    .replace(/(^|[\s(])[zZ]\s*h(?=\s|$|[a-zà-ỹ])/g, "$17h ").replace(/(^|[\s(])[lI|ịÌÍ][oO]h\b/g, "$119h").replace(/(^|[\s,.])(\d{1,2})(?=(tiêm|uống|uong)\b)/g, "$1$2h ")
+    .replace(/(^|[\sx(:,;-])[lI|ịỊÌÍ](?=\d)/g, "$11").replace(/(\d)[lI|](?=\d|\s*(đv|dv|UI|IU|viên|ml|mg)\b)/gi, "$11")
     .replace(/(^|[\sx(:,;-])[oO](?=\d)/g, "$10").replace(/(\d)[oO](?=\d|\b)/g, "$10").replace(/(\d)[S](?=\d|\s*(đv|dv|UI|viên)\b)/g, "$15")
     // đơn vị insulin: UI = IU = U = đv = đơn vị (OCR: Ul, lU, U1, dv, đy, ðv, d.v)
-    .replace(/(\d)\s*(?:U[Il1lJ|]|[Il1l|]U|IU|UI)(?![A-Za-zÀ-ỹ])/g, "$1 UI").replace(/(\d)\s*[đdðĐD]\s*\.?\s*[vVyYựư](?![A-Za-zÀ-ỹ])/g, "$1 đv")
+    .replace(/(\d)\s*(?:U[Il1lJ|]|[Il1l|]U|IU|UI)(?![A-Za-zÀ-ỹ])/g, "$1 UI").replace(/(\d)\s*(?:đẩy|đấy|ẩy|ấy|ẩv|ấv|đẩv)(?![A-Za-zÀ-ỹ])/g, "$1 đv").replace(/(\d)\s*[đdðĐD]\s*\.?\s*[vVyYựư](?![A-Za-zÀ-ỹ])/g, "$1 đv")
     .replace(/(\d)\s*[đdĐD][oơóô]n\s*v[iịíì](?![A-Za-zÀ-ỹ])/gi, "$1 đơn vị")
     .replace(/(\d)\s*m[Il1|](?![A-Za-zÀ-ỹ])/g, "$1ml").replace(/(\d)\s*rng(?![A-Za-zÀ-ỹ])/g, "$1mg");
   s = s.replace(/½/g, " 1/2").replace(/¼/g, " 1/4").replace(/¾/g, " 3/4").replace(/[⁄∕]/g, "/")
     .replace(/(^|[\s(])[lIÍÌ|!](?=\s*\/\s*[234]\b)/g, "$11")                 // "l/2" → "1/2"
     .replace(/(\d)\s*\/\s*([234])(?=\s*(v|viên|vien|gói|goi|ống|ong|\b))/gi, "$1/$2");   // "1 / 2 viên" → "1/2 viên"
-  return s.replace(/(^|\s)[ÍÌIïîl|!](?=\s*(viên|viện|vien|gói|goi|ống|ong|lần|lan)\b)/gi, "$11")
-    .replace(/\b([2-9])(\d)\s*h\b/g, (m, a, b) => (+(a + b) > 24 ? "1" + b : a + b) + "h")
-    .replace(/(\d{1,2}h\s+)[uưn]?[ôoốóòơ]{0,2}ng\b/gi, "$1uống").replace(/\b(?:uong|uông|uóng|nóng|nong)\b/gi, "uống")
-    .replace(/\b(trước|truoc|sau)\W*an\b/gi, (m, a) => a.toLowerCase().replace("truoc", "trước") + " ăn").replace(/\b(vien|viện|viến|viễn)\b/gi, "viên")
+  const W = "(?![A-Za-zÀ-ỹ])";
+  s = s.replace(new RegExp("(^|[\\s,.])(?:s[aơøoâ]u|sao)\\s*[:.]?\\s*(?:[aăâởôơðồẩảóòõoọ]n)" + W, "gi"), "$1sau ăn")
+    .replace(new RegExp("(trước|truoc|trưóc|trươc)\\s*[:.]?\\s*(?:[aăâởôơðồẩảóòõoọ]n)" + W, "gi"), "trước ăn")
+    .replace(new RegExp("(\\d\\s*|x\\s*\\d+\\s*|chia\\s*\\d+\\s*|\\/\\s*)(?:l[ồêàâáẩăổôóơ]n|lản|lẫn)" + W, "gi"), "$1lần")
+    .replace(new RegExp("(sau\\s*khi|saukhi)\\s*(?:[aăâởôơðồẩảóòõoọ]n)" + W, "gi"), "$1 ăn").replace(new RegExp("(^|\\s)s[ơø]u" + W, "gi"), "$1sau")
+    .replace(new RegExp("(^|[\\s,.-])(?:s[óảâấạ]ng|sống)(?=\\s*(\\d|uống|[,-]|1v))", "gi"), "$1sáng")
+    .replace(new RegExp("dưới\\s+(?:độ|đa|đo|đà|dà)" + W, "gi"), "dưới da")
+    .replace(/(^|\s)[ỐÔOo0][I1l](?=\s*(viên|v\b|gói))/g, "$101")
+    .replace(new RegExp("(^|\\s)pho(?=\\s+\\d)", "gi"), "$1pha")
+    .replace(/(^|\s)(\d{1,2})n(?=\s+(sáng|uống|tiêm|tối|chiều))/g, "$1$2h").replace(/^\s*9h(?=\s+tối)/, "19h").replace(/^\s*mm(?=\s+(uống|tiêm))/, "7h")
+    .replace(/(sáng|trưa|chiều|tối)\s*[†!¡ÌÍl|I](?=\s|$|[-,.])/gi, "$1 1").replace(/(^|[\s-])0[lI|](?![A-Za-zÀ-ỹ])/g, "$101");
+  return s.replace(/(^|\s)[ÍÌIïîÏl|!¡](?=\s*(viên|viện|vien|viền|viến|viễn|gói|goi|ống|ong|lần|lan|v)(?![A-Za-zÀ-ỹ]))/gi, "$11")
+    .replace(/(^|\s)(\d{1,3})\s*[il](?=\s+([uưn]?[ôoốóòơỏỎÔ]{0,2}ng|tiêm|sáng|tối))/gi, "$1$2h")
+    .replace(/(^|[\s,.-])1?([1-9]\d)\s*h\b/g, (m, p, a) => p + (+a > 24 ? "1" + a[1] : a) + "h")
+    .replace(/(\d{1,2}h\s+)[uưn]?[ôoốóòơỏồổõọ]{0,2}ng(?![A-Za-zÀ-ỹ])/gi, (m, a) => /ng$/i.test(m) && m.length - a.length <= 1 ? m : a + "uống").replace(/\b(?:uong|uông|uóng|nóng|nong)\b/gi, "uống")
+    .replace(/\b(trước|truoc|sau)\W*an\b/gi, (m, a) => a.toLowerCase().replace("truoc", "trước") + " ăn").replace(/(^|[^A-Za-zÀ-ỹ])(vien|viện|viến|viễn|viền|vlên)(?![A-Za-zÀ-ỹ])/gi, "$1viên")
     .replace(/\s{2,}/g, " ").trim();
 }
 const RX_KET = /(ngay\s*\d{1,2}\s*thang|bac si|y si|nguoi ke|loi dan|tong (so|cong)|ky ten|tai kham|ho ten nguoi|cong khoan)/;
@@ -135,7 +161,7 @@ function suaChu(text, M = CD) {
     const w = parts[idx[k]], cands = ungVien(w, M);
     const lien = k > 0 && !/[;,.:()\/]/.test(parts.slice(idx[k - 1] + 1, idx[k]).join(""));
     const cur = cands.map(([c, pen]) => {
-      const own = 0.5 * lg(M.u[c]) + pen + (c === w.toLowerCase() ? 1 : 0);
+      const own = 0.5 * lg(M.u[c]) + pen + (c === w.toLowerCase() ? ((M.u[c] || 0) >= 100 && /[^a-z]/.test(c) ? 3 : 1) : 0);   // từ có dấu, gặp nhiều trong HIS: giữ nguyên
       if (!prev) return {c, sc: own, back: null};
       let best = null;
       for (const p of prev) { const sc = p.sc + own + (lien ? (M.b[p.c + " " + c] ? 3 * lg(M.b[p.c + " " + c]) : -1.5) : 0); if (!best || sc > best.sc) best = {c, sc, back: p}; }
@@ -217,36 +243,65 @@ function parseOcr(text) {
   }
   out.chan_doan = suaChu(cd.join(" ")).replace(/\(\s*\)/g, "").replace(/\b[A-Z1l][0-9OIl]{2}(?:\.\d{1,2})?\b\s*[-–:]?\s*/g, "").replace(/\s{2,}/g, " ").trim().slice(0, 300);
   if (out.chan_doan.replace(/[^A-Za-zÀ-ỹ]/g, "").length < 6) out.chan_doan = tenIcd([...out.icd_chinh, ...out.icd_kem]).join("; ");   // không đọc được chữ → lấy tên ICD chuẩn
-  // thuốc
-  let cur = null;
+  // thuốc. Mẫu HIS in STT giữa ô 2 dòng (tên thuốc / cách dùng) nên OCR hay gắn STT vào dòng cách dùng;
+  // vì vậy phân loại dòng theo NỘI DUNG (biệt dược trong ngoặc, hàm lượng, cột SL–đơn vị, từ cách dùng), không theo STT.
+  const goc = text.split(/\n+/).map(s => s.replace(/[|¦]/g, " ").replace(/\s+$/, "")).filter(s => s.trim());   // giữ khoảng trắng để nhận cột SL/ĐV
+  let cur = null, truocLaLieu = false;
   const push = () => { if (cur) { cur.lieu = suaChu(cur.lieu.join(" ").replace(/\s{2,}/g, " ").trim(), LD); out.thuoc.push(cur); cur = null; } };
+  const RX_COT = /\s{3,}(?:[^\s]{1,5}\s+)?(viên|vien|viện|vlên|lọ|lo|chai|gói|goi|ống|ong|tuýp|tuyp|bút|but|túi|tui|hộp|hop|vỉ)\W{0,3}$/i;
+  const RX_HL = /\d\s*(mg|mcg|µg|g|ml|iu|ui|%)\b|\d\s*mg/i;
   for (let i = start; i < lines.length; i++) {
-    const u = U[i], raw = lines[i];
+    const u = U[i], raw = lines[i], rg = goc[i] || raw;
     if (RX_KET.test(u) && !/\d+\s*(vien|goi|ong)/.test(u)) { push(); if (out.thuoc.length) break; else continue; }
-    const numbered = /^\s*\d{1,2}\s*(?:[.)\/-]\s*|\s+(?=[A-Za-zÀ-ỹ]{3}))\S/.test(u) && !/^\s*\d{1,2}\s*(h|gio)\b/.test(u);
-    const body = raw.replace(/^\s*\d{1,2}\s*[.)\/-]?\s*/, "");
-    const md = (numbered || !cur || !RX_DUNG.test(u)) ? matchLine(body) : null;
-    const dangHis = /\([^()]{3,50}\)\s*[-–]?\s*\d/.test(raw) && /\d\s*(mg|g|mcg|ml|iu|ui|%)/i.test(raw);
-    if (md || numbered || dangHis) {
+    if (/ten thuoc|hoat chat|don vi\s*$|^\W*stt\b/.test(u) && !/\([^()]*\d/.test(raw)) continue;            // dòng tiêu đề bảng
+    // tách cột SL/đơn vị (cách xa chữ ≥3 khoảng trắng) và rác cột ở cuối dòng, để chữ "Viên" của cột ĐV không làm dòng tên thuốc giống cách dùng
+    const cot = rg.match(RX_COT), sCot = cot ? cot[0].trim().match(/^(\S+)?\s*(\S+)\W*$/) : null;
+    const core = (cot ? rg.slice(0, cot.index) : rg).replace(/(\s{4,}\S{1,3})+\s*$/, "").replace(/\s{2,}/g, " ").trim();
+    const stt = core.match(/^\s*(\d{1,2})\s*(?:[.)\]}:;,\/-]+\s*|\s+)(?=\S)/);
+    const coStt = stt && !/^\s*\d{1,2}\s*(h\b|gio|v\b|vien|goi|ong|lan|ml|\/|[.,]\d)/.test(ud(core));
+    const body = coStt ? core.slice(stt[0].length) : core, ub = ud(body);
+    if (cot && cur && !(body.match(/[A-Za-zÀ-ỹ]{3,}/g) || []).length) {           // dòng chỉ có STT + SL + đơn vị (tên thuốc ở dòng trên)
+      const n = sCot && sCot[1] ? parseFloat(sCot[1].replace(/^[sS](?=\d)/, "5").replace(/[oO]/g, "0").replace(",", ".")) : NaN;
+      if (cur.sl == null && n > 0) { cur.sl = n; cur.dv = DV[ud(sCot[2]).replace(/[^a-z]/g, "")] || cur.dv; }
+      continue;
+    }
+    const L2 = suaLieu(cur && !cur.lieu.length ? boDauKe(body) : body), laLieu = RX_DUNG.test(ud(L2));
+    const coNgoac = /\([^()]{2,60}\)|\([A-Za-zÀ-ỹ]{2,}[^()]{3,}$/.test(body), coCot = !!cot;
+    const coHl = RX_HL.test(body) || /\d\s*(me|mẹ|ng|rng|mq|mgg)(?![A-Za-zÀ-ỹ])/.test(body) || /\)\s*[-–—]\s*[\dOoIl]/.test(body);
+    const md = (!laLieu || coNgoac || coCot || !cur) ? matchLine(body) : null;
+    const chu = (body.match(/[A-Za-zÀ-ỹ]/g) || []).length;
+    // dòng thuốc: biệt dược trong ngoặc + (hàm lượng | cột SL/ĐV | khớp danh mục), hoặc khớp danh mục mà không phải câu cách dùng,
+    // hoặc (sau khi thuốc trước đã có cách dùng) dòng chữ hoa đầu không phải cách dùng – tên thuốc đọc không ra, vẫn giữ đúng hàng
+    const laThuoc = (coNgoac && (coHl || coCot || md || /\)\s*[-–—]\s*\S/.test(body))) || (coCot && !laLieu && chu >= 4) || (md && !laLieu) ||
+      (md && md.score >= 0.9 && !/^\s*(\d{1,2}\s*h|sang|trua|chieu|toi|ngay|uong|tiem)/.test(ub)) ||
+      (cur && cur.lieu.length && !laLieu && chu >= 6 && /^[A-ZÀ-Ỹ]/.test(body.trim()) && coHl);
+    if (laThuoc && cur && !cur.lieu.length && !truocLaLieu && (cur.chua_khop || !md)) {   // tên thuốc in đậm bị OCR tách thành 2 dòng: gộp, không thêm thuốc
+      if (md && cur.chua_khop) { out.khong_ro = out.khong_ro.filter(x => x !== cur.ten); cur.ten = md.ten; cur.chua_khop = false; }
+      if (cur.sl == null) { const q = [...u.replace(/\bs(\d)\b/g, "5$1").replace(/\bo(\d)\b/g, "0$1").matchAll(RX_SO_DV)]; if (q.length) { const l = q[q.length - 1]; cur.sl = parseFloat(l[1].replace(",", ".")); cur.dv = DV[l[2]]; } }
+      continue;
+    }
+    if (laThuoc) {
       push();
       const q = [...u.replace(/\bs(\d)\b/g, "5$1").replace(/\bo(\d)\b/g, "0$1").matchAll(RX_SO_DV)];   // OCR: "s6" = 56
       let sl = null, dv = "Viên";
       const sm = u.match(/(?:sl|s\.l|so luong)\s*[:.]?\s*(\d+(?:[.,]\d+)?)\s*([a-z]+)?/);
       if (sm) { sl = parseFloat(sm[1].replace(",", ".")); if (sm[2] && DV[sm[2]]) dv = DV[sm[2]]; }
       else if (q.length) { const l = q[q.length - 1]; sl = parseFloat(l[1].replace(",", ".")); dv = DV[l[2]]; }
-      let ten = md ? md.ten : tenTho(body);
+      const ten = md ? md.ten : tenTho(body);
       cur = {ten, sl, dv, lieu: [], chua_khop: !md};
-      // lời dặn nằm cùng dòng sau tên/số lượng
-      const tail = raw.split(/(?:SL|S\.L|Số lượng)\s*[:.]?\s*\d+\s*\S*/i)[1];
+      const tail = raw.split(/(?:SL|S\.L|Số lượng)\s*[:.]?\s*\d+\s*\S*/i)[1];   // lời dặn nằm cùng dòng sau số lượng
       if (tail && RX_DUNG.test(ud(tail))) cur.lieu.push(tail.trim());
       if (!md) out.khong_ro.push(ten);
+      truocLaLieu = false;
     } else if (cur) {
-      const chiSl = u.replace(/[^a-z0-9]+/g, " ").trim().match(/^(?:\d{1,2}\s+)?(?:[a-z]{1,2}\s+)*(\d+)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)$/);
-      const cuoiSl = !/(uong|sang|trua|chieu|toi|\d\s*h\b|truoc\W*an|sau\W*an|lan|ngay|moi)/.test(ud(suaLieu(raw))) && u.replace(/[^a-z0-9]+/g, " ").trim().match(/(\d+)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)$/);
-      if (chiSl || cuoiSl) { const q = chiSl || cuoiSl; if (cur.sl == null) { cur.sl = parseFloat(q[1]); cur.dv = DV[q[2]]; } continue; }   // dòng chỉ có STT/SL/đơn vị (cột bảng) hoặc phần tên bị tách dòng
-      if (cur.sl == null) { const q = [...u.matchAll(RX_SO_DV)]; const sm = u.match(/(?:sl|so luong)\s*[:.]?\s*(\d+)/); if (sm) cur.sl = +sm[1]; else if (q.length && !RX_DUNG.test(u)) { cur.sl = parseFloat(q[0][1]); cur.dv = DV[q[0][2]]; } }
-      const L2 = suaLieu(raw);
-      if (RX_DUNG.test(ud(L2))) cur.lieu.push(L2.replace(/\s*[:.,;~=-]+\s*$/, "").replace(/(sau|trước):\s*/i, "$1 "));
+      const chiSl = ub.replace(/[^a-z0-9]+/g, " ").trim().match(/^(?:\d{1,2}\s+)?(?:[a-z]{1,2}\s+)*(\d+)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)$/);
+      const cuoiSl = !laLieu && ub.replace(/[^a-z0-9]+/g, " ").trim().match(/(\d+)\s*(vien|goi|ong|chai|lo|tuyp|hop|but|tui)$/);
+      if (chiSl || cuoiSl) { const q = chiSl || cuoiSl; if (cur.sl == null) { cur.sl = parseFloat(q[1]); cur.dv = DV[q[2]]; } continue; }   // dòng chỉ có STT/SL/đơn vị (cột bảng)
+      if (cur.sl == null) { const q = [...u.matchAll(RX_SO_DV)]; const sm = u.match(/(?:sl|so luong)\s*[:.]?\s*(\d+)/); if (sm) cur.sl = +sm[1]; else if (q.length && !laLieu) { cur.sl = parseFloat(q[0][1]); cur.dv = DV[q[0][2]]; } }
+      // dòng thứ 2 của ô luôn là cách dùng – đọc mờ vẫn giữ để DS sửa
+      const noiTiep = truocLaLieu && chu >= 2 && /^[\s(]*[a-zà-ỹ(0-9]/.test(body);   // cách dùng dài xuống dòng (chữ thường đầu dòng)
+      if (laLieu || noiTiep || (!cur.lieu.length && chu >= 3 && !coNgoac)) { cur.lieu.push(L2.replace(/\s*[:.,;~=-]+\s*$/, "").replace(/(sau|trước):\s*/i, "$1 ")); truocLaLieu = true; }
+      else truocLaLieu = false;
     }
   }
   push();
