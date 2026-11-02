@@ -135,18 +135,24 @@
   function warp() {
     const [a, b, c, d] = S.pts, len = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1]);
     const wSrc = (len(a, b) + len(d, c)) / 2, hSrc = (len(a, d) + len(b, c)) / 2;
-    const W = Math.round(Math.min(1800, Math.max(900, wSrc))), H = Math.round(W * hSrc / wSrc);
+    const W = 2000, H = Math.round(W * hSrc / wSrc);          // ~300 dpi cho tờ A5: chữ đủ cao để Tesseract đọc (ảnh nhỏ thì phóng to)
     const h = homography(S.pts, [[0, 0], [W, 0], [W, H], [0, H]]);
     const sd = S.img.getContext("2d").getImageData(0, 0, S.img.width, S.img.height).data, SW = S.img.width, SH = S.img.height;
     const out = document.createElement("canvas"); out.width = W; out.height = H;
     const g = out.getContext("2d"), od = g.createImageData(W, H), o = od.data;
     let lo = 255, hi = 0; const gray = new Uint8ClampedArray(W * H);
+    const lum = new Float32Array(SW * SH);
+    for (let i = 0, k = 0; i < SW * SH; i++, k += 4) lum[i] = 0.299 * sd[k] + 0.587 * sd[k + 1] + 0.114 * sd[k + 2];
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const z = h[6] * x + h[7] * y + 1, u = (h[0] * x + h[1] * y + h[2]) / z, v = (h[3] * x + h[4] * y + h[5]) / z;
-      const ui = u | 0, vi = v | 0; let L = 255;
-      if (ui >= 0 && vi >= 0 && ui < SW && vi < SH) { const k = (vi * SW + ui) * 4; L = 0.299 * sd[k] + 0.587 * sd[k + 1] + 0.114 * sd[k + 2]; }
+      let L = 255;
+      if (u >= 0 && v >= 0 && u < SW - 1 && v < SH - 1) {             // nội suy song tuyến (ảnh mịn khi phóng to)
+        const ui = u | 0, vi = v | 0, fx = u - ui, fy = v - vi, k = vi * SW + ui;
+        L = (lum[k] * (1 - fx) + lum[k + 1] * fx) * (1 - fy) + (lum[k + SW] * (1 - fx) + lum[k + SW + 1] * fx) * fy;
+      }
       gray[y * W + x] = L;
     }
+    phangNen(gray, W, H);
     const hist = new Uint32Array(256); gray.forEach(v => hist[v]++);   // kéo giãn tương phản (bỏ 1% hai đầu)
     let acc = 0; for (let i = 0; i < 256; i++) { acc += hist[i]; if (acc > W * H * 0.01) { lo = i; break; } }
     acc = 0; for (let i = 255; i >= 0; i--) { acc += hist[i]; if (acc > W * H * 0.01) { hi = i; break; } }
@@ -155,6 +161,55 @@
     g.putImageData(od, 0, 0);
     return out;
   }
+  /* chia cho nền mờ: khử bóng/sáng không đều khi chụp bằng điện thoại */
+  function phangNen(g, W, H) {
+    const r = Math.max(15, Math.round(W / 40)), I = new Float64Array((W + 1) * (H + 1));
+    for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += g[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + row; } }
+    const out = new Uint8ClampedArray(W * H);
+    for (let y = 0; y < H; y++) {
+      const y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+      for (let x = 0; x < W; x++) {
+        const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+        const m = (I[y1 * (W + 1) + x1] - I[y0 * (W + 1) + x1] - I[y1 * (W + 1) + x0] + I[y0 * (W + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+        out[y * W + x] = Math.min(255, g[y * W + x] / Math.max(1, m * 1.02) * 255);
+      }
+    }
+    g.set(out);
+  }
+  /* tự đặt sẵn 4 góc quanh vùng chữ của tờ đơn: tìm các điểm tối hơn nền xung quanh (nét chữ),
+     lấy dải hàng/cột có mật độ chữ liên tục lớn nhất → khung chữ nhật, nới thêm lề */
+  function timTo(c) {
+    const sc = 360 / Math.max(c.width, c.height), w = Math.round(c.width * sc), h = Math.round(c.height * sc);
+    const t = document.createElement("canvas"); t.width = w; t.height = h; const g = t.getContext("2d"); g.drawImage(c, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data, L = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) L[i] = d[i * 4] * 0.299 + d[i * 4 + 1] * 0.587 + d[i * 4 + 2] * 0.114;
+    const r = 6, I = new Float64Array((w + 1) * (h + 1));
+    for (let y = 0; y < h; y++) { let row = 0; for (let x = 0; x < w; x++) { row += L[y * w + x]; I[(y + 1) * (w + 1) + x + 1] = I[y * (w + 1) + x + 1] + row; } }
+    const T = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1), y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+      const m = (I[y1 * (w + 1) + x1] - I[y0 * (w + 1) + x1] - I[y1 * (w + 1) + x0] + I[y0 * (w + 1) + x0]) / ((x1 - x0) * (y1 - y0));
+      T[y * w + x] = m > 120 && L[y * w + x] < m - 22 ? 1 : 0;          // nét tối trên nền sáng (bỏ vật tối lớn)
+    }
+    const run = (prof, n, thr, gap) => {                                   // dải dài nhất có mật độ ≥ thr, cho phép hở ≤ gap
+      let best = [0, -1], s = -1, last = -1;
+      for (let i = 0; i <= n; i++) {
+        if (i < n && prof[i] >= thr) { if (s < 0) s = i; last = i; }
+        else if (s >= 0 && (i === n || i - last > gap)) { if (last - s > best[1] - best[0]) best = [s, last]; s = -1; }
+      }
+      return best;
+    };
+    const col = new Float32Array(w), rowP = new Float32Array(h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (T[y * w + x]) { col[x]++; rowP[y]++; }
+    const [x0, x1] = run(col, w, h * 0.02, Math.round(w * 0.04));
+    for (let y = 0; y < h; y++) { rowP[y] = 0; for (let x = x0; x <= x1; x++) rowP[y] += T[y * w + x]; }
+    const [y0, y1] = run(rowP, h, (x1 - x0 + 1) * 0.015, Math.round(h * 0.05));
+    if (x1 - x0 < w * 0.3 || y1 - y0 < h * 0.25) return null;
+    const mx = (x1 - x0) * 0.04, my = (y1 - y0) * 0.03;
+    const X0 = Math.max(0, x0 - mx) / sc, X1 = Math.min(w, x1 + mx) / sc, Y0 = Math.max(0, y0 - my) / sc, Y1 = Math.min(h, y1 + my) / sc;
+    return [[X0, Y0], [X1, Y0], [X1, Y1], [X0, Y1]];
+  }
+  window.__timTo = timTo; window.__scan = S;
   function usePage() {
     S.pages.push(warp()); hide("crop");
     el("moreTxt").textContent = `Đã có ${S.pages.length} trang. Đơn còn trang nữa không?`;
@@ -172,7 +227,7 @@
   async function fromFiles(files) {
     files = [...files]; if (!files.length) return;
     if (files.length > 1) return window.readPhotos(files);      // nhiều ảnh: đọc thẳng
-    openCrop(await fileToCanvas(files[0]));
+    const c = await fileToCanvas(files[0]); openCrop(c, timTo(c) || undefined);
   }
 
   /* ---------- tiện ích ---------- */
@@ -191,6 +246,6 @@
   el("cropOk").onclick = usePage;
   el("moreYes").onclick = () => { hide("more"); S.from = "more"; openScanner(); };
   el("moreNo").onclick = finish;
-  el("cam").onchange = async e => { const f = e.target.files; if (f.length) openCrop(await fileToCanvas(f[0])); e.target.value = ""; };
+  el("cam").onchange = async e => { const f = e.target.files; if (f.length) { const c = await fileToCanvas(f[0]); openCrop(c, timTo(c) || undefined); } e.target.value = ""; };
   el("pick").onchange = e => { fromFiles(e.target.files); e.target.value = ""; };
 })();
