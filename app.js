@@ -60,14 +60,95 @@ function tachDong(s) {
 }
 function matchLine(s) {
   const t = tachDong(s);
-  if (t) { const r = matchDrug(`${t.bd} ${t.hl}`) || matchDrug(t.bd); if (r) return r; }
+  if (t) {
+    const r = matchDrug(`${t.bd} ${t.hl}`) || matchDrug(t.bd); if (r) return r;
+    if (D && t.hc && t.hl) {                                          // biệt dược đọc sai: khớp theo hoạt chất + hàm lượng nếu danh mục chỉ có 1 thuốc như vậy
+      const hc = coreTokens(suaHc(t.hc)).filter(w => w.length >= 4), so = [...nums(t.hl)].sort().join("+");
+      const ung = D.dm.filter(x => hc.length && hc.every(w => ud(x.hc).includes(w)) && [...nums(x.hl || x.ten)].sort().join("+") === so);
+      if (new Set(ung.map(x => x.ten)).size === 1) return {ten: ung[0].ten, score: 0.8};
+    }
+  }
   return matchDrug(s);
+}
+let hcTu = null;                                                     // từ trong tên hoạt chất của danh mục (sửa lỗi OCR tên hoạt chất)
+function suaHc(s) {
+  if (!hcTu && D) { hcTu = new Map(); D.dm.forEach(x => String(x.hc || "").split(/[^A-Za-zÀ-ỹ]+/).forEach(w => { if (w.length >= 4) hcTu.set(ud(w), w.toLowerCase()); })); }
+  if (!hcTu) return s;
+  return s.replace(/[A-Za-zÀ-ỹ]{4,}/g, w => {
+    const b = ud(w); if (hcTu.has(b)) return w;
+    let best = null, bs = 0; for (const [k, v] of hcTu) { const x = sim(b, k); if (x > bs) { bs = x; best = v; } }
+    return bs >= 0.75 ? (w[0] !== w[0].toLowerCase() ? best[0].toUpperCase() + best.slice(1) : best) : w;
+  });
 }
 function tenTho(s) {
   const t = tachDong(s);
+  if (t) t.hc = suaHc(t.hc);
   if (t && t.hc) return `${t.bd} (${t.hc})${t.hl && !(t.hl.match(/[\d.,]+/g) || []).every(n => t.bd.includes(n)) ? " " + t.hl : ""}`;   // giữ hoạt chất để quy tắc theo hoạt chất vẫn chạy
   return s.replace(/(SL|S\.L|Số lượng)\s*[:.]?.*$/i, "").replace(/\d+\s*(Viên|Gói|Ống|Chai|Lọ|Tuýp)\s*$/i, "").trim();
 }
+/* ---------- sửa chính tả chẩn đoán sau OCR ----------
+   Từ điển lấy từ chẩn đoán của BV (9 tháng HIS) + tên ICD chuẩn: với mỗi chữ OCR, tìm các chữ cùng "khung không dấu"
+   (hoặc sai 1 ký tự), chọn chuỗi có tần suất cụm 2 chữ cao nhất (Viterbi). Vd "biên chúng" → "biến chứng". */
+let CD = null, LD = null;
+function moHinh(u, b) {
+  const base = new Map(), base1 = new Map();
+  for (const w of Object.keys(u)) {
+    const b = ud(w); (base.get(b) || base.set(b, []).get(b)).push(w);
+    if (b.length >= 4) for (let i = 0; i < b.length; i++) { const k = b.slice(0, i) + "*" + b.slice(i + 1); (base1.get(k) || base1.set(k, new Set()).get(k)).add(b); }
+  }
+  return {u, b, base, base1};
+}
+function napChanDoan(j) { CD = Object.assign(moHinh(j.u, j.b), {icd: j.icd}); if (j.lu) LD = moHinh(j.lu, j.lb); }
+function ungVien(w, M) {
+  const lw = w.toLowerCase(), b = ud(lw), out = new Map();
+  (M.base.get(b) || []).forEach(c => out.set(c, 0));
+  if (!out.size && b.length >= 4) {                                   // sai 1 ký tự (thay/thiếu/thừa)
+    const near = new Set();
+    for (let i = 0; i < b.length; i++) { (M.base1.get(b.slice(0, i) + "*" + b.slice(i + 1)) || []).forEach(x => near.add(x));
+      const del = b.slice(0, i) + b.slice(i + 1); if (M.base.has(del)) near.add(del); }
+    for (let i = 0; i <= b.length; i++) { const k = b.slice(0, i) + "*" + b.slice(i); (M.base1.get(k) || []).forEach(x => { if (x.length === b.length + 1) near.add(x); }); }
+    near.forEach(x => (M.base.get(x) || []).forEach(c => out.set(c, -5)));
+    out.set(lw, 0);                                                   // giữ nguyên chữ gốc nếu ngữ cảnh không ủng hộ chữ gần giống
+  }
+  if (!out.size) out.set(lw, 0);
+  return [...out.entries()];
+}
+function suaChu(text, M = CD) {
+  if (!M || !text) return text;
+  const parts = text.split(/([A-Za-zÀ-ỹĐđ]+)/), idx = [];
+  parts.forEach((p, i) => { if (i % 2 && p.length > 1) idx.push(i); });
+  if (!idx.length) return text;
+  const lg = x => Math.log((x || 0) + 1);
+  let prev = null;                                                    // Viterbi theo từng cụm chữ liền nhau
+  for (let k = 0; k < idx.length; k++) {
+    const w = parts[idx[k]], cands = ungVien(w, M);
+    const lien = k > 0 && !/[;,.:()\/]/.test(parts.slice(idx[k - 1] + 1, idx[k]).join(""));
+    const cur = cands.map(([c, pen]) => {
+      const own = 0.5 * lg(M.u[c]) + pen + (c === w.toLowerCase() ? 1 : 0);
+      if (!prev) return {c, sc: own, back: null};
+      let best = null;
+      for (const p of prev) { const sc = p.sc + own + (lien ? (M.b[p.c + " " + c] ? 3 * lg(M.b[p.c + " " + c]) : -1.5) : 0); if (!best || sc > best.sc) best = {c, sc, back: p}; }
+      return best;
+    });
+    prev = cur;
+  }
+  let node = prev.reduce((a, b) => (b.sc > a.sc ? b : a));
+  for (let k = idx.length - 1; k >= 0; k--, node = node.back) {
+    const w = parts[idx[k]], c = node.c;
+    const dau = k === 0 || /[;.:(]/.test(parts.slice(idx[k - 1] + 1, idx[k]).join(""));   // đầu câu/đầu ý
+    const hoa = w[0] !== w[0].toLowerCase() && (dau || !M.u[c]);                                 // giữa câu: bỏ chữ hoa do OCR
+    parts[idx[k]] = w === w.toUpperCase() && w.length > 1 ? c.toUpperCase() : hoa ? c[0].toUpperCase() + c.slice(1) : c;
+  }
+  const r = parts.join("");
+  return M === CD ? r.replace(/(^|\s)[a-z](?=\s)/g, "$1").replace(/\s{2,}/g, " ") : r;   // chẩn đoán: bỏ ký tự lẻ do OCR
+}
+function hienTenIcd() {                                               // tên chuẩn theo mã ICD để đối chiếu chữ chẩn đoán
+  const el = $("cdicd"); if (!el) return;
+  const cs = ($("icd1").value + "," + $("icd2").value).toUpperCase().match(/[A-Z]\d{2}(?:\.\d{1,2})?/g) || [], t = tenIcd(cs);
+  el.hidden = !t.length; el.textContent = t.length ? "Theo mã ICD: " + cs.map(c => c + " " + (CD.icd[c] || CD.icd[c.slice(0, 3)] || "?")).join("; ") : "";
+}
+const tenIcd = codes => CD ? codes.map(c => CD.icd[c] || CD.icd[c.slice(0, 3)]).filter(Boolean) : [];
+
 function parseOcr(text) {
   const lines = text.split(/\n+/).map(s => s.replace(/[|¦]/g, " ").replace(/\s{2,}/g, " ").trim()).filter(Boolean);   // bỏ kẻ bảng
   const U = lines.map(ud);
@@ -81,7 +162,7 @@ function parseOcr(text) {
       if (/loi dan\s*[:.]?\s*$/.test(u) && lines[i + 1] && !RX_KET.test(U[i + 1]) && !/^ngay\b/.test(U[i + 1])) ld.push(lines[i + 1]);
     }
   });
-  out.loi_dan = [...new Set(ld.map(x => x.trim()).filter(x => (x.match(/[A-Za-zÀ-ỹ]{2,}/g) || []).length >= 2))].join("; ").slice(0, 300);
+  out.loi_dan = suaChu([...new Set(ld.map(x => x.trim()).filter(x => (x.match(/[A-Za-zÀ-ỹ]{2,}/g) || []).length >= 2))].join("; ").slice(0, 300), LD);
   const mh = U.join(" ").match(/(?:hen|tai kham|kham lai)[^0-9]{0,25}(\d{1,2}\s*[\/.-]\s*\d{1,2}\s*[\/.-]\s*\d{2,4})/);
   if (mh) out.ngay_hen = mh[1].replace(/\s/g, "").replace(/[.-]/g, "/");
   // ngày kê
@@ -103,19 +184,22 @@ function parseOcr(text) {
   // ICD + chẩn đoán (trước vùng thuốc)
   const cd = [];
   let inCd = false;
-  for (let i = 0; i < (start || lines.length); i++) {
+  let thayCd = false;
+  for (let i = 0; i < lines.length; i++) {                           // chẩn đoán có thể nằm trước hoặc sau bảng thuốc tùy mẫu đơn
     const u = U[i];
-    if (/han doan|chuan doan|icd|(^|\s)ma\s*\W?[il1|]?cd\b|[\[(|]cd\s*1?0|benh chinh|benh kem/.test(u)) inCd = true;
+    if (thayCd && (/(thuoc dieu tri|ten thuoc|^stt\b|^\d{1,2}\s*[.)]?\s+\S.*\d\s*(mg|ml|g)\b)/.test(u) || RX_KET.test(u))) break;
+    if (/han doan|chuan doan|icd|(^|\s)ma\s*\W?[il1|]?cd\b|[\[(|]cd\s*1?0|benh chinh|benh kem/.test(u)) inCd = thayCd = true;
     else if (inCd && /^(ho ten|dia chi|so the|gioi|ma (bn|benh nhan)|doi tuong|khoa|phong)/.test(u)) inCd = false;
     if (!inCd) continue;
     const isMa = /^\W*(ma\s*)?\W?[il1|]?cd\b/.test(u);
     if (!isMa) cd.push(lines[i].replace(/^.{0,4}h[aâ]n\s*đo[aá]n\s*[:.]?/i, "").replace(/^(Chẩn đoán|Chan doan)\s*[:.]?/i, "").trim());
     for (const tok of (isMa ? lines[i].replace(/^.*?[CС]D\s*-?\s*1?0?\s*[:.;]?/i, " ") : lines[i]).split(/[\s;:()\[\],-]+/)) { const c = fixIcd(tok.replace(/\.$/, "")); if (c && !out.icd_chinh.includes(c) && !out.icd_kem.includes(c)) (out.icd_chinh.length ? out.icd_kem : out.icd_chinh).push(c); }
   }
-  out.chan_doan = cd.join(" ").replace(/\(\s*\)/g, "").replace(/\b[A-Z1l][0-9OIl]{2}(?:\.\d{1,2})?\b\s*[-–:]?\s*/g, "").replace(/\s{2,}/g, " ").slice(0, 200);
+  out.chan_doan = suaChu(cd.join(" ")).replace(/\(\s*\)/g, "").replace(/\b[A-Z1l][0-9OIl]{2}(?:\.\d{1,2})?\b\s*[-–:]?\s*/g, "").replace(/\s{2,}/g, " ").trim().slice(0, 300);
+  if (out.chan_doan.replace(/[^A-Za-zÀ-ỹ]/g, "").length < 6) out.chan_doan = tenIcd([...out.icd_chinh, ...out.icd_kem]).join("; ");   // không đọc được chữ → lấy tên ICD chuẩn
   // thuốc
   let cur = null;
-  const push = () => { if (cur) { cur.lieu = cur.lieu.join(" ").replace(/\s{2,}/g, " ").trim(); out.thuoc.push(cur); cur = null; } };
+  const push = () => { if (cur) { cur.lieu = suaChu(cur.lieu.join(" ").replace(/\s{2,}/g, " ").trim(), LD); out.thuoc.push(cur); cur = null; } };
   for (let i = start; i < lines.length; i++) {
     const u = U[i], raw = lines[i];
     if (RX_KET.test(u) && !/\d+\s*(vien|goi|ong)/.test(u)) { push(); if (out.thuoc.length) break; else continue; }
@@ -218,7 +302,7 @@ function drugRow(t = {}) {
 function fillForm(don, nguon) {
   $("tuoi").value = don.tuoi ?? ""; $("ngay").value = don.ngay || "";
   $("icd1").value = (don.icd_chinh || []).join(", "); $("icd2").value = (don.icd_kem || []).join(", ");
-  $("cdoan").value = don.chan_doan || ""; $("loidan").value = don.loi_dan || ""; $("ngayhen").value = don.ngay_hen || ""; $("drugs").innerHTML = "";
+  $("cdoan").value = don.chan_doan || ""; hienTenIcd(); $("loidan").value = don.loi_dan || ""; $("ngayhen").value = don.ngay_hen || ""; $("drugs").innerHTML = "";
   (don.thuoc || []).forEach(drugRow); if (!(don.thuoc || []).length) drugRow();
   $("src").textContent = nguon;
 }
@@ -230,7 +314,7 @@ function readForm() {
     thuoc: [...document.querySelectorAll(".drug")].map(d => ({ten: d.querySelector(".ten").value.trim(), sl: num(d.querySelector(".sl").value),
       dv: d.querySelector(".dv").value.trim(), lieu: d.querySelector(".lieu").value.trim()})).filter(t => t.ten)};
 }
-document.querySelector("#pane-rs").addEventListener("input", e => { if (e.target.matches("input,textarea")) autoReview(); });
+document.querySelector("#pane-rs").addEventListener("input", e => { if (e.target.matches("input,textarea")) autoReview(); if (/^icd/.test(e.target.id)) hienTenIcd(); });
 $("add").onclick = () => { drugRow(); $("drugs").lastElementChild.querySelector(".ten").focus(); };
 $("clear").onclick = () => {
   fillForm({thuoc: []}, ""); $("thumbs").innerHTML = ""; $("rawbox").hidden = true;
@@ -245,6 +329,7 @@ fillForm({tuoi: 70, ngay: "15/10/2026", icd_chinh: ["M10"], icd_kem: ["I10", "N1
 const texts = {};
 const getText = p => texts[p] || (texts[p] = fetch(p).then(r => { if (!r.ok) throw new Error("Không tải được " + p); return r.text(); }));
 const dataReady = (async () => {
+  getText("data/chan_doan.json").then(t => { napChanDoan(JSON.parse(t)); hienTenIcd(); }).catch(() => {});
   const [qt, dm, td] = await Promise.all(["data/quy_tac.json", "data/danh_muc.json", "data/thoi_diem.json"].map(getText));
   D = buildLookup(JSON.parse(qt), JSON.parse(dm), JSON.parse(td));
   dmNames = [...new Set(D.dm.map(x => x.ten))];

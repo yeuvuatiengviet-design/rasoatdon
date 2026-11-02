@@ -64,7 +64,8 @@
     </div>
     <label for="icd1">ICD bệnh chính<input id="icd1" autocomplete="off" autocapitalize="characters"></label>
     <label for="icd2">ICD bệnh kèm theo<input id="icd2" autocomplete="off" autocapitalize="characters" placeholder="I10, E11"></label>
-    <label for="cdoan">Chẩn đoán<input id="cdoan" autocomplete="off"></label>
+    <label for="cdoan">Chẩn đoán<textarea id="cdoan" rows="3" autocomplete="off"></textarea></label>
+    <p class="small mut" id="cdicd" hidden style="margin:-4px 0 0"></p>
     <div id="drugs" style="display:grid;gap:8px"></div>
     <label for="loidan">Lời dặn của bác sĩ<textarea id="loidan" rows="2" placeholder="vd: Hẹn tái khám ngày 29/11/2026 / Tái khám sau 1 tháng"></textarea></label>
     <label for="ngayhen">Ngày hẹn tái khám (nếu lời dặn không ghi rõ)<input id="ngayhen" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy"></label>
@@ -109,7 +110,7 @@
   <div class="croptop">Kéo 4 chấm tròn cho khớp 4 góc tờ đơn</div>
   <div class="cropbox" id="cropBox"><canvas id="cropImg"></canvas>
     <svg class="poly"><polygon id="cropPoly"></polygon></svg>
-    <span class="hd" id="h0"></span><span class="hd" id="h1"></span><span class="hd" id="h2"></span><span class="hd" id="h3"></span></div>
+    <span class="hdl" id="h0"></span><span class="hdl" id="h1"></span><span class="hdl" id="h2"></span><span class="hdl" id="h3"></span></div>
   <div class="cropbot"><button type="button" class="ovbtn" id="cropRetake">Chụp lại</button><button type="button" class="ovbtn" id="cropRotate">Xoay ⟳</button><button type="button" class="ovbtn" id="cropFull">Cả ảnh</button><button type="button" class="ovbtn primary" id="cropOk">Dùng ảnh</button></div>
 </div>
 <div class="ov more" id="more" hidden><div class="morebox"><p id="moreTxt"></p><div class="row"><button type="button" id="moreYes" style="flex:1">Chụp trang tiếp</button><button type="button" class="primary" id="moreNo" style="flex:1">Đọc đơn</button></div></div></div>
