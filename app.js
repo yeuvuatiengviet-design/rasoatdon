@@ -270,6 +270,7 @@ function setEng(text, cls) { $("eng").textContent = text; $("eng").className = "
 /* ---------- tab ---------- */
 function tab(which) {
   const rs = which === "rs";
+  if (rs) setTimeout(gianHet, 30);
   $("tab-rs").setAttribute("aria-selected", rs); $("tab-tc").setAttribute("aria-selected", !rs);
   $("pane-rs").hidden = !rs; $("pane-tc").hidden = rs; $("dock").hidden = !rs;
   if (!rs) setTimeout(() => $("q").focus(), 50);
@@ -310,10 +311,10 @@ function drugRow(t = {}) {
   const i = Math.random().toString(36).slice(2, 8);
   const d = document.createElement("div"); d.className = "drug" + (t.chua_khop ? " warn" : "");
   d.innerHTML = `<div class="hd"><label for="t${i}">Tên thuốc${t.chua_khop ? " – chưa khớp danh mục" : ""}<input id="t${i}" list="dmlist" autocomplete="off" class="ten"></label>
-    <button type="button" class="x" aria-label="Xóa thuốc">Xóa</button></div>
+    <button type="button" class="x" aria-label="Xóa thuốc" title="Xóa thuốc">✕</button></div>
     <div class="qty"><label for="s${i}">Số lượng<input id="s${i}" inputmode="decimal" class="sl"></label>
     <label for="d${i}">Đơn vị<input id="d${i}" class="dv" list="dvlist" autocomplete="off"></label></div>
-    <label for="l${i}">Cách dùng<textarea id="l${i}" rows="2" class="lieu"></textarea></label>`;
+    <label for="l${i}">Cách dùng<textarea id="l${i}" rows="1" class="lieu"></textarea></label>`;
   d.querySelector(".ten").value = t.ten || ""; d.querySelector(".sl").value = t.sl ?? ""; d.querySelector(".dv").value = t.dv || "Viên";
   d.querySelector(".lieu").value = t.lieu || "";
   d.querySelector(".x").onclick = () => { d.remove(); autoReview(); };
@@ -324,7 +325,7 @@ function fillForm(don, nguon) {
   $("icd1").value = (don.icd_chinh || []).join(", "); $("icd2").value = (don.icd_kem || []).join(", ");
   $("cdoan").value = don.chan_doan || ""; hienTenIcd(); $("loidan").value = don.loi_dan || ""; $("ngayhen").value = don.ngay_hen || ""; $("drugs").innerHTML = "";
   (don.thuoc || []).forEach(drugRow); if (!(don.thuoc || []).length) drugRow();
-  $("src").textContent = nguon;
+  $("src").textContent = nguon; gianHet();
 }
 function readForm() {
   const icds = s => (s.toUpperCase().match(/[A-Z]\d{2}(?:\.\d{1,2})?/g) || []);
@@ -408,14 +409,25 @@ function render(r, don) {
   $("st").textContent = `${don.thuoc.length} thuốc · tuổi ${don.tuoi ?? "?"} · ICD ${[...don.icd_chinh, ...don.icd_kem].join(", ") || "chưa có"}${hen} · ${iss.length ? iss.length + " vấn đề" : "không phát hiện vấn đề"}${nghiSl.length ? " · Kiểm tra lại số lượng đọc từ ảnh (khung vàng): " + nghiSl.join(", ") : ""}`;
   const card = i => {
     const m = MUC[i.muc] || 3, cls = ["", "s1", "s2", "s3"][m];
+    let vd = String(i.van_de || ""), cc = String(i.can_cu || "");
+    const ng = vd.match(/\s*\[(Tờ HDSD[^\]]*|Nguồn[^\]]*|Danh mục[^\]]*)\]\s*$/); if (ng) { vd = vd.slice(0, ng.index); cc = cc || ng[1]; }
+    i = {...i, van_de: vd, can_cu: cc};
     return `<article class="issue m${m}"><div class="h"><span class="pill ${cls}">${esc(i.muc)}</span><span class="small mut">${esc(i.tieu_chi)}</span>${i.xuat_toan === "Có" ? '<span class="pill s1">Nguy cơ xuất toán</span>' : ""}</div>
       <div class="t">${String(i.thuoc).includes(" + ") || String(i.thuoc).includes(", ") ? esc(i.thuoc) : `<button class="link t" type="button" data-thuoc="${esc(i.thuoc)}">${esc(i.thuoc)} ›</button>`}</div><p>${esc(i.van_de)}</p>${i.de_xuat ? `<div class="dx">→ ${esc(i.de_xuat)}</div>` : ""}
-      ${i.nhan_xet ? `<p class="mut small">DS: ${esc(i.nhan_xet)}</p>` : ""}${i.can_cu ? `<div class="cc">Căn cứ: ${esc(i.can_cu).slice(0, 300)}</div>` : ""}</article>`;
+      ${i.nhan_xet ? `<p class="mut small">DS: ${esc(i.nhan_xet)}</p>` : ""}${i.can_cu ? `<div class="cc gon" tabindex="0" title="Chạm để xem đủ">Căn cứ: ${esc(i.can_cu)}</div>` : ""}</article>`;
   };
   const chinh = iss.filter(i => i.muc !== "Tham khảo"), tk = iss.filter(i => i.muc === "Tham khảo");
   $("issues").innerHTML = chinh.map(card).join("") + (tk.length ? `<details class="more"${chinh.length ? "" : " open"}><summary>${tk.length} mục Tham khảo</summary><div style="display:grid;gap:8px">${tk.map(card).join("")}</div></details>` : "");
-  $("ct").innerHTML = r.chi_tiet.map(c => `<tr><td><button class="link" type="button" data-thuoc="${esc(c.thuoc)}">${esc(c.thuoc)}</button></td><td>${esc(c.hoat_chat)}</td><td class="n">${c.dv_ngay != null ? c.dv_ngay + " " + String(c.don_vi || "").toLowerCase() : c.ui_ngay ? c.ui_ngay + " UI" : "–"}</td><td class="n">${c.so_ngay ?? "–"}</td>
-    <td>${esc(c.phu_hop_icd)}</td><td>${esc(c.can_cu_icd)}</td><td>${esc(c.danh_muc)}</td></tr>`).join("");
+  const fit = v => /^Phù hợp$/.test(v) ? "ok" : /điều kiện|Ngoài/.test(v) ? "s2" : /Không phù hợp/.test(v) ? "s1" : "s3";
+  const so = x => String(x).replace(".", ",");
+  $("ct").innerHTML = r.chi_tiet.map(c => {
+    const lieu = c.dv_ngay != null ? `${so(c.dv_ngay)} ${String(c.don_vi || "").toLowerCase()}/ngày` : c.ui_ngay ? `${so(c.ui_ngay)} UI/ngày` : "";
+    const dm = /không có/i.test(c.danh_muc || "") ? `<span class="pill s3">Ngoài danh mục</span>` : "";
+    return `<div class="ctc"><div class="ctt"><button class="link" type="button" data-thuoc="${esc(c.thuoc)}">${esc(c.thuoc)} ›</button>${c.phu_hop_icd ? `<span class="pill ${fit(c.phu_hop_icd)}">${esc(c.phu_hop_icd)}</span>` : ""}${dm}</div>
+      ${c.hoat_chat ? `<div class="small mut">${esc(c.hoat_chat)}</div>` : ""}
+      <div class="ctn">${[c.so_luong != null ? `${so(c.so_luong)} ${esc(String(c.don_vi || "").toLowerCase())}` : "", lieu, c.so_ngay != null ? `≈ ${so(c.so_ngay)} ngày` : "", c.thoi_diem_hdsd ? esc(c.thoi_diem_hdsd) : ""].filter(Boolean).join(" · ")}</div>
+      ${c.can_cu_icd ? `<div class="cc gon" tabindex="0">ICD: ${esc(c.can_cu_icd)}</div>` : ""}</div>`;
+  }).join("");
 }
 function resultText() {
   if (!lastResult) return "";
@@ -633,7 +645,11 @@ addEventListener("appinstalled", () => { $("installbox").hidden = true; });
 // Chrome chưa báo được (đang tải lần đầu, hoặc trình duyệt khác): vẫn hiện hướng dẫn thủ công sau vài giây
 setTimeout(() => { if (!standalone() && !hideInstall && $("installbox").hidden) { $("installbox").hidden = false; } }, 6000);
 
-document.addEventListener("click", e => { const b = e.target.closest("[data-thuoc]"); if (b) moThuoc(b.dataset.thuoc); });
+document.addEventListener("click", e => { const g = e.target.closest(".cc.gon,.cc.mo"); if (g) { g.classList.toggle("gon"); g.classList.toggle("mo"); return; } const b = e.target.closest("[data-thuoc]"); if (b) moThuoc(b.dataset.thuoc); });
+/* ô chữ tự giãn theo nội dung (không phải cuộn trong ô) */
+function gian(t) { if (t && t.tagName === "TEXTAREA") { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; } }
+document.addEventListener("input", e => gian(e.target));
+function gianHet() { requestAnimationFrame(() => document.querySelectorAll("#pane-rs textarea").forEach(gian)); }
 
 // nút "Cài app" luôn có ở thanh trên khi chưa cài
 if (!standalone()) $("instTop").hidden = false;

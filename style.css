@@ -90,7 +90,7 @@ pre.raw{white-space:pre-wrap;font-size:.78rem;background:var(--bg);border:1px so
 .ttr b{font-weight:600}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
-@media (max-width:380px){.grid2{grid-template-columns:1fr}.dl{grid-template-columns:1fr}.dl dt{font-weight:600;color:var(--fg)}}
+@media (max-width:380px){.dl{grid-template-columns:1fr}.dl dt{font-weight:600;color:var(--fg)}}
 .dl dd{white-space:pre-line}
 .dl dd.bad{color:var(--crit);font-weight:600} .dl dd.warnc{color:var(--warn);font-weight:600}
 h3.sec{font-size:.92rem;margin:6px 0 0;padding-top:8px;border-top:1px solid var(--line)}
@@ -140,3 +140,23 @@ body.noscroll{overflow:hidden}
 /* bảng rộng chỉ cuộn trong khung, không kéo giãn cả trang */
 .card>*,details.more,details.more>*,#pane-rs,#pane-tc,main{min-width:0}.wrap{max-width:100%}
 .sl.nghi{border-color:var(--warn);background:var(--warn-bg);box-shadow:0 0 0 2px var(--warn-bg)}
+/* ---- vừa màn hình điện thoại: kết quả dạng thẻ, ô nhập gọn ---- */
+.ctl{display:grid;gap:8px;margin-top:6px}
+.ctc{border:1px solid var(--line);border-radius:10px;padding:9px 11px;display:grid;gap:3px;background:var(--surface)}
+.ctt{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.ctt .link{font-weight:600;text-align:left;padding:0}
+.ctn{font-size:.86rem;font-variant-numeric:tabular-nums}
+.pill.ok{background:var(--soft);color:var(--ok)}
+.cc{cursor:pointer;overflow-wrap:anywhere}
+.cc.gon{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cc.gon::after{content:""}
+.issue p,.issue .dx{overflow-wrap:anywhere}
+.drug{padding:8px 10px;gap:6px}
+.drug .hd{grid-template-columns:1fr 40px;gap:6px}
+.drug .x{min-height:40px;width:40px;padding:0;font-size:1rem;line-height:1;color:var(--mut)}
+.drug .qty{grid-template-columns:1fr 1fr}
+textarea{overflow:hidden;min-height:44px}
+.sum div{padding:7px 9px;font-size:.74rem;line-height:1.25}
+.sum b{font-size:1.3rem}
+@media (max-width:360px){body{font-size:14px}.sum{gap:6px}.sum div{padding:6px 7px;font-size:.7rem}}
+.icdrow{grid-template-columns:minmax(84px,1fr) 2fr}

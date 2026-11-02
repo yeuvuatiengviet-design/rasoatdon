@@ -48,7 +48,7 @@
     </div>
     <div id="issues" style="display:grid;gap:8px"></div>
     <details class="more" id="ctbox" hidden><summary>Chi tiết từng thuốc</summary>
-      <div class="wrap"><table><thead><tr><th>Thuốc</th><th>Hoạt chất</th><th>Liều/ngày</th><th>Số ngày</th><th>ICD theo HDSD</th><th>Căn cứ</th><th>Danh mục</th></tr></thead><tbody id="ct"></tbody></table></div>
+      <div id="ct" class="ctl"></div>
     </details>
     <div class="row" id="acts" hidden>
       <button id="copy" type="button" style="flex:1">Sao chép</button>
@@ -62,8 +62,10 @@
       <label for="tuoi">Tuổi<input id="tuoi" inputmode="decimal" autocomplete="off"></label>
       <label for="ngay">Ngày kê<input id="ngay" inputmode="numeric" autocomplete="off" placeholder="dd/mm/yyyy"></label>
     </div>
-    <label for="icd1">ICD bệnh chính<input id="icd1" autocomplete="off" autocapitalize="characters"></label>
-    <label for="icd2">ICD bệnh kèm theo<input id="icd2" autocomplete="off" autocapitalize="characters" placeholder="I10, E11"></label>
+    <div class="grid2 icdrow">
+    <label for="icd1">ICD chính<input id="icd1" autocomplete="off" autocapitalize="characters"></label>
+    <label for="icd2">ICD kèm theo<input id="icd2" autocomplete="off" autocapitalize="characters" placeholder="I10, E11"></label>
+    </div>
     <label for="cdoan">Chẩn đoán<textarea id="cdoan" rows="3" autocomplete="off"></textarea></label>
     <p class="small mut" id="cdicd" hidden style="margin:-4px 0 0"></p>
     <div id="drugs" style="display:grid;gap:8px"></div>
