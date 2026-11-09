@@ -165,7 +165,8 @@ def doc_quy_tac(path):
             sp[k] = dict(ten_thuoc=r["ten_thuoc"], max_nl=nl, max_tre=tre, tuoi_nl=_f(r.get("tuoi_nguoi_lon_tu")) or 12,
                          theo_icd=[(a.rsplit(":", 1)[0], float(a.rsplit(":", 1)[1])) for a in theo_icd.split("|") if ":" in a],
                          min_nl=mn, min_icd=[(a.rsplit(":", 1)[0], float(a.rsplit(":", 1)[1])) for a in mn_icd.split("|") if ":" in a],
-                         ghi_chu=r.get("lieu_tom_tat") or "")
+                         ghi_chu=r.get("lieu_tom_tat") or "",
+                         chi_dinh=",".join(str(x) for x in (r.get("icd_HDSD"), r.get("icd_HDSD_co_dieu_kien")) if x))
     return dict(thuoc=rows("Quy_tac_thuoc"), bhyt=rows("Dieu_kien_BHYT"), tt=rows("Tuong_tac"), tt2=TTM.doc(rows, cfg), dc=DC.doc(rows),
                 trung={r["nhom"]: r["muc_do"] for r in rows("Trung_nhom")}, sp=sp, cfg=cfg, hdsd=hdsd)
 
@@ -184,24 +185,69 @@ def tra_bang(bang, *ten):
         if m: return bang[m[0]]
     return None
 
-def gioi_han_lieu(sp, tuoi, icds):
-    """Trả (max đơn vị/ngày, mô tả) theo tuổi và ICD; None nếu không áp dụng."""
-    if not sp: return None, ""
-    for spec, v in sp.get("theo_icd") or []:
-        if any_icd(icds, spec): return v, f"theo ICD {spec}"
+# Liều theo chỉ định (mã ICD) – cột max_dv_ngay_theo_icd / min_dv_ngay_theo_icd: "SPEC:giá trị|SPEC:giá trị"
+#   SPEC thường (vd "J02,J03:2")  = liều của chỉ định đó (người lớn);
+#   "*:giá trị"                   = liều mặc định cho các chỉ định khác của thuốc (thay cho cột người lớn);
+#   "!SPEC:giá trị" (vd "!N18.5,Z99.2:8") = trần/sàn giảm liều theo tình trạng (suy thận...), áp cho mọi tuổi.
+# Đơn có nhiều mã chỉ định: lấy liều của chỉ định cho phép cao nhất (max) / thấp nhất (min) – ICD nào liều nấy.
+def _tach_spec(specs):
+    cap, ind, md = [], [], None
+    for s, v in specs or []:
+        s = s.strip()
+        if s.startswith("!"): cap.append((s[1:], v))
+        elif s == "*": md = v
+        else: ind.append((s, v))
+    return cap, ind, md
+
+def _theo_chi_dinh(sp, icds, ind, md, chung, chon):
+    """Mỗi mã ICD của đơn là chỉ định của thuốc → liều riêng (spec khớp cụ thể nhất) hoặc mặc định; chọn theo `chon`."""
+    cd = sp.get("chi_dinh") or ""
+    out = []
+    for c in icds:
+        hits = [(len(icd_match(c, s)), v, s) for s, v in ind if icd_match(c, s)]
+        if hits:
+            _, v, s = max(hits, key=lambda h: h[0]); out.append((v, c))
+        elif (not cd.strip() or icd_match(c, cd)):
+            v = md if md is not None else chung
+            if v is not None: out.append((v, c))
+    return chon(out, key=lambda x: x[0]) if out else None
+
+def gioi_han_lieu(sp, tuoi, icds, chi_tiet=False):
+    """Trả (max đơn vị/ngày, mô tả) theo tuổi và ICD chỉ định; None nếu không áp dụng.
+    chi_tiet=True: trả thêm cờ True khi giới hạn là liều riêng của chỉ định thấp hơn liều tối đa chung."""
+    kq = lambda lim, mo, rieng=False: (lim, mo, rieng) if chi_tiet else (lim, mo)
+    if not sp: return kq(None, "")
+    cap, ind, md = _tach_spec(sp.get("theo_icd"))
     tnl = sp.get("tuoi_nl") or 12
+    rieng = False
     if tuoi is not None and tuoi < tnl:
-        return (sp.get("max_tre"), f"trẻ <{tnl:g} tuổi") if sp.get("max_tre") is not None else (None, "")
-    return sp.get("max_nl"), "người lớn"
+        lim, mo = (sp.get("max_tre"), f"trẻ <{tnl:g} tuổi") if sp.get("max_tre") is not None else (None, "")
+    else:
+        lim, mo = sp.get("max_nl"), "người lớn"
+        if ind or md is not None:
+            r = _theo_chi_dinh(sp, icds, ind, md, sp.get("max_nl"), max)
+            if r:
+                lim, mo = r[0], f"liều cho chỉ định {r[1]}"
+                rieng = sp.get("max_nl") is None or lim < sp.get("max_nl") - 1e-9
+    for s, v in cap:
+        m = any_icd(icds, s)
+        if m and (lim is None or v < lim): lim, mo, rieng = v, f"giảm liều do {m[0]}", False
+    return kq(lim, mo, rieng)
 
 TUOI_NL_MIN = 18
 ICD_GIAM_LIEU = "N17-N19,K70-K77"     # suy thận/suy gan: HDSD thường cho phép giảm liều
 def lieu_toi_thieu(sp, tuoi, icds):
-    """Trả (min đơn vị/ngày, mô tả) cho người lớn ≥18 tuổi; None nếu không áp dụng."""
+    """Trả (min đơn vị/ngày, mô tả) cho người lớn ≥18 tuổi theo ICD chỉ định; None nếu không áp dụng."""
     if not sp or tuoi is None or tuoi < TUOI_NL_MIN: return None, ""
-    for spec, v in sp.get("min_icd") or []:
-        if any_icd(icds, spec): return v, f"theo ICD {spec}"
-    return sp.get("min_nl"), "người lớn"
+    cap, ind, md = _tach_spec(sp.get("min_icd"))
+    lo, mo = sp.get("min_nl"), "người lớn"
+    if ind or md is not None:
+        r = _theo_chi_dinh(sp, icds, ind, md, sp.get("min_nl"), min)
+        if r: lo, mo = r[0], f"liều cho chỉ định {r[1]}"
+    for s, v in cap:
+        m = any_icd(icds, s)
+        if m and (lo is None or v < lo): lo, mo = v, f"giảm liều do {m[0]}"
+    return lo, mo
 
 # ---------------- liều/ngày ----------------
 _DEM = r"vien|virn|goi|ong|v\b|g\b"
@@ -438,10 +484,16 @@ def ra_soat(dons, dm, Q, bang_td=None):
             vuot_mg = False
             sp = tra_bang(Q["sp"], t["ten"], (info or {}).get("ten"))
             if sp:
-                lim, mo_ta = gioi_han_lieu(sp, d["tuoi"], icds)
+                lim, mo_ta, rieng = gioi_han_lieu(sp, d["tuoi"], icds, chi_tiet=True)
+                if rieng and dvn and sp.get("max_nl") is not None and dvn > sp["max_nl"] + 1e-6:
+                    lim, mo_ta, rieng = sp["max_nl"], f"người lớn; riêng {mo_ta} chỉ {lim:g} {t['dv']}/ngày", False   # vượt cả liều tối đa chung
                 if lim is not None and dvn and dvn > lim + 1e-6:
-                    add(t["ten"], hc, "Liều dùng", f"{dvn:g} {t['dv']}/ngày vượt tối đa {lim:g} {t['dv']}/ngày ({mo_ta}) theo HDSD. {sp.get('ghi_chu') or ''} (lời dặn: '{t['lieu']}')".strip(),
-                        "Nghiêm trọng", "Giảm liều theo HDSD", "Thuoc_HDSD / Danh mục: " + str((info or {}).get("lieu") or "")[:200], "", muc_icd)
+                    if rieng:      # ≤ liều tối đa chung nhưng vượt liều HDSD cho đúng chỉ định (mã ICD) của đơn
+                        add(t["ten"], hc, "Liều theo chỉ định (ICD)", f"{dvn:g} {t['dv']}/ngày vượt liều {lim:g} {t['dv']}/ngày ({mo_ta}) theo HDSD; liều tối đa chung {sp.get('max_nl'):g} {t['dv']}/ngày chỉ dành cho chỉ định khác. {sp.get('ghi_chu') or ''} (lời dặn: '{t['lieu']}')".strip(),
+                            "Cần lưu ý", "Chỉnh liều theo đúng chỉ định hoặc bổ sung mã ICD của chỉ định cần liều cao", "Thuoc_HDSD (max_dv_ngay_theo_icd) / Danh mục: " + str((info or {}).get("lieu") or "")[:200], "", muc_icd)
+                    else:
+                        add(t["ten"], hc, "Liều dùng", f"{dvn:g} {t['dv']}/ngày vượt tối đa {lim:g} {t['dv']}/ngày ({mo_ta}) theo HDSD. {sp.get('ghi_chu') or ''} (lời dặn: '{t['lieu']}')".strip(),
+                            "Nghiêm trọng", "Giảm liều theo HDSD", "Thuoc_HDSD / Danh mục: " + str((info or {}).get("lieu") or "")[:200], "", muc_icd)
                 lo, mo_ta = lieu_toi_thieu(sp, d["tuoi"], icds)
                 if lo is not None and dvn and dvn < lo - 1e-6:
                     giam = (d["tuoi"] or 0) >= 65 or bool(any_icd(icds, ICD_GIAM_LIEU))

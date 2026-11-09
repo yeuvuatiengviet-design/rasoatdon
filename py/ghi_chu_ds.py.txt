@@ -38,6 +38,11 @@ def quy_tac_chung(i, cach_dung):
     # Liều: lời dặn nhiều giai đoạn -> script cộng dồn
     if tc == "Liều dùng" and re.search(r"tuan dau|ngay dau|sau do|roi giam|tiep theo", cd):
         return "Tham khảo", "Lời dặn có nhiều giai đoạn (vd 'tuần đầu… sau đó…') – chương trình có thể cộng dồn liều các giai đoạn. DS đọc lại lời dặn trước khi kết luận vượt liều."
+    # Liều theo chỉ định (ICD): vượt liều HDSD của đúng chỉ định nhưng còn trong liều tối đa chung
+    if tc == "Liều theo chỉ định (ICD)":
+        if re.search(r"tuan dau|ngay dau|sau do|roi giam|tiep theo", cd):
+            return "Tham khảo", "Lời dặn có nhiều giai đoạn – chương trình có thể cộng dồn liều. DS đọc lại lời dặn trước khi kết luận vượt liều theo chỉ định."
+        return None, "Liều vượt khuyến cáo HDSD cho chỉ định (mã ICD) ghi trên đơn; liều cao hơn chỉ dành cho chỉ định khác. Nếu BN thực sự có chỉ định cần liều cao (nhiễm khuẩn nặng, bệnh kèm) đề nghị bổ sung đúng mã ICD đó vào đơn; nếu không, chỉnh liều theo chỉ định."
     # Liều dưới khuyến cáo
     if tc == "Liều dưới khuyến cáo":
         if re.search(r"tuan dau|ngay dau|sau do|roi giam|tiep theo|cach ngay|thu [2-7]|cn\b|chu nhat", cd):
